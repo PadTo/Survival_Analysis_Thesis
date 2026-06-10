@@ -2,9 +2,9 @@
 .vscode/
 
 
-Data/raw/
-Data/interim/
-Data/final/
+*Data/raw/
+*Data/interim/
+*Data/final/
 
 
 Output/
