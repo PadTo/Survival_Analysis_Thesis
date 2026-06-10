@@ -1,10 +1,7 @@
 
 .vscode/
 
-
-*Data/raw/
-*Data/interim/
-*Data/final/
+*.csv
 
 
 Output/
