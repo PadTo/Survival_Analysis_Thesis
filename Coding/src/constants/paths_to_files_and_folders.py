@@ -1,6 +1,6 @@
 from pathlib import Path
 
-ABSOLUTE_PATH = Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Coding")
+ABSOLUTE_PATH = Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding")
 PATH_TO_DATA_FOLDER = ABSOLUTE_PATH / "Data"
 PATH_TO_RAW_DATA  = PATH_TO_DATA_FOLDER / "raw"
 PATH_TO_INTERIM_DATA =  PATH_TO_DATA_FOLDER / "interim"
