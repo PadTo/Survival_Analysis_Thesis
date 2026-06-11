@@ -1,20 +1,3 @@
-import pandas as pd
-from pathlib import Path
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.preprocessing import LabelEncoder
-from sklearn.impute import KNNImputer
-import polars as pl
-from sklearn.model_selection import train_test_split
-from datetime import timedelta
-from .constants.variables_and_grouping import activity_type_groups, app_type_groups, brand_group_map
-from .constants.columns import (
-    USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
-    CHURN_TRIGGERED_COL, VEHICLE_ID_COL, VEHICLE_MAKE_COL,
-    VEHICLE_MODEL_COL, VEHICLE_START_YEAR_COL, VEHICLE_END_YEAR_COL,
-    VEHICLE_MILEAGE_COL, APP_COL, ACTIVITY_TYPE_COL,
-    STILL_IN_PRODUCTION_COL, INTERVAL_START_COL,
-    YEAR_BIN_LOWER, YEAR_BIN_UPPER, YEAR_BIN_UPPER_REPLACEMENT
-)
 
 import pandas as pd
 from pathlib import Path
@@ -33,6 +16,15 @@ from .constants.columns import (
     STILL_IN_PRODUCTION_COL, INTERVAL_START_COL,
     YEAR_BIN_LOWER, YEAR_BIN_UPPER, YEAR_BIN_UPPER_REPLACEMENT
 )
+
+
+
+
+LOOKBACK_PERIODS = (1,2,3)
+INTERVAL_IN_DAYS: int = 14
+N_NEIGHBOURS = 5
+COL_TEMPLATE_FORMAT_AT = "n_{a}_{start}_{end}_days" 
+
 
 
 class DataProcessor():
@@ -40,7 +32,7 @@ class DataProcessor():
     def __init__(self, df: pd.DataFrame | pl.DataFrame) -> None:
         self.df = df.copy(deep=True) if type(df) == pd.DataFrame else df
 
-    def KNN_impute_vehicle_start_year(self, df: pl.DataFrame, n_neighbours: int = 5) -> pl.DataFrame:
+    def KNN_impute_vehicle_start_year(self, df: pl.DataFrame, n_neighbours: int = N_NEIGHBOURS) -> pl.DataFrame:
         """
         Imputes missing vehicle_start_year values using KNN based on
         vehicle make and mileage.
@@ -221,7 +213,7 @@ class DataProcessor():
     def _generate_intervals(self,
                             df: pl.DataFrame,
                             churn_adjusted_date_col_name: str | None = None,
-                            interval: int = 14) -> pl.DataFrame:
+                            interval: int = INTERVAL_IN_DAYS) -> pl.DataFrame:
 
         churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
 
@@ -269,13 +261,39 @@ class DataProcessor():
 
         return df_with_intervals
 
-    def _generate_activity_feature_aggregation(self) -> tuple[list, list]:
+    def _generate_activity_feature_aggregation(self,
+                                               lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+                                               interval_in_days: int = INTERVAL_IN_DAYS) -> tuple[list, list]:
+        
+        
+        
+        post_agg: list = []
+        column_names_to_keep: list = []
+        col_registry:
         activity_types: list[str] = list(sorted(set(activity_type_groups.values())))
 
-        agg: list = [(pl.col(ACTIVITY_TYPE_COL) != "none").sum().alias("n_actions")] + \
-                    [(pl.col(ACTIVITY_TYPE_COL) == a).sum().alias(f"n_{a}") for a in activity_types]
 
-        post_agg: list = [(pl.col(f"n_{a}") / pl.col("n_actions")).fill_nan(0.0).alias(f"prop_{a}") for a in activity_types]
+        agg: list = [(pl.col(ACTIVITY_TYPE_COL) != "none").sum().alias("n_actions_current")] + \
+                    [(pl.col(ACTIVITY_TYPE_COL) == a).sum().alias(COL_TEMPLATE_FORMAT_AT.format(a=a,
+                                                                                                start = 0,
+                                                                                                end   = interval_in_days)) for a in activity_types]
+
+        # post_agg: list = [(pl.col(f"n_{a}") / pl.col("n_actions")).fill_nan(0.0).alias(f"prop_{a}") for a in activity_types]
+
+
+        for period in lookback_periods:
+            post_agg += [
+                pl.col(COL_TEMPLATE_FORMAT_AT.format(a=a, start=0, end=interval_in_days))
+                .shift(period, fill_value=0)
+                .alias(COL_TEMPLATE_FORMAT_AT.format(a=a, start=interval_in_days * period, end=interval_in_days * (period + 1)))
+                for a in activity_types
+                ]
+            
+            post_agg += [
+                pl.col()
+            ]
+        # post_agg += [pl.col()]
+        # column_names_to_keep += 
 
         return agg, post_agg
     
@@ -330,31 +348,34 @@ class DataProcessor():
     def apply_feature_engineering(self,
                                    df: pl.DataFrame,
                                    churn_adjusted_date_col_name: str | None = None,
-                                   interval: int = 14,
-                                   lookback_duration: int = 14,
-                                   lookback_periods: tuple[int, int] = (1, 2)) -> pl.DataFrame | None:
+                                   interval_in_days: int = INTERVAL_IN_DAYS,
+                                   lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS) -> pl.DataFrame | None:
 
         churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
 
         try:
+            group_by_columns = [USER_ID_COL, INTERVAL_START_COL]
             df = self._prepare_df(df, churn_adjusted_date_col_name)
-            df_with_intervals = self._generate_intervals(df, churn_adjusted_date_col_name, interval)
+            df_with_intervals = self._generate_intervals(df, churn_adjusted_date_col_name, interval_in_days)
             # print(df_with_intervals)
             # print(df_with_intervals.columns)
         
 
-            agg, post_agg = self._generate_activity_feature_aggregation()
-            agg_b, post_agg_b = self._generate_behaviour_features()
-            agg_app, post_agg_app = self._generate_app_column_feature_aggregation()
-            agg_v, post_agg_v = self._generate_vehicle_make_feature_aggregation()
+            agg, post_agg = self._generate_activity_feature_aggregation(lookback_periods,
+                                                                        interval_in_days)
+            # agg_b, post_agg_b = self._generate_behaviour_features()
+            # agg_app, post_agg_app = self._generate_app_column_feature_aggregation()
+            # agg_v, post_agg_v = self._generate_vehicle_make_feature_aggregation()
 
-            agg += agg_b + agg_app + agg_v
-            post_agg += post_agg_app + post_agg_v + [pl.col("user_id"), pl.col("interval_start")]
+            # agg += agg_b + agg_app + agg_v
+            # post_agg += post_agg_app + post_agg_v + [pl.col("user_id"), pl.col("interval_start")]
 
-            d = df_with_intervals.group_by([USER_ID_COL, INTERVAL_START_COL]).agg(agg).with_columns(post_agg)
+            d = df_with_intervals.group_by(group_by_columns).agg(agg).sort(group_by_columns).with_columns(post_agg)
 
-            print(d.sort(["user_id","interval_start"]))
-            print(d)
+            print(d.columns)
+
+            # print(d.sort(["user_id","interval_start"]))
+            # print(d)
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
 
@@ -363,7 +384,7 @@ class DataProcessor():
 
 
 
-df_vh = pl.read_csv(Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Coding\Data\interim\personal_users_dataset.csv"))
+df_vh = pl.read_csv(Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\interim\personal_users_dataset.csv"))
 dp = DataProcessor(df_vh)
 # df = dp.KNN_impute_vehicle_start_year(df_vh)
 # dp.split_train_val_test(df_vh)
