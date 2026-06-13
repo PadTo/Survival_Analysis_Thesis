@@ -199,7 +199,8 @@ class DataProcessor():
                 .replace(activity_type_groups),
             pl.col(APP_COL)
                 .str.to_lowercase()
-                .str.strip_chars(),
+                .str.strip_chars()
+                .replace(app_type_groups),
             pl.col(VEHICLE_MAKE_COL)
                 .str.to_lowercase()
                 .str.strip_chars()
@@ -287,7 +288,7 @@ class DataProcessor():
         col_registry: dict[tuple[int, int], list[str]] = {
             (0, interval_in_days): [
                 COL_TEMPLATE_FORMAT.format(a=token, start=0, end=interval_in_days)
-                for token in base_columns
+                for token in base_columns.keys()
             ]
         }
 
@@ -298,7 +299,7 @@ class DataProcessor():
             end_interval = interval_in_days * (period + 1)
 
             for token, source_col in base_columns.items():
-                # Here we take the initially computed column which is with start = 0 and end = interval_in_days
+                # Taking the initially computed column which is with start = 0 and end = interval_in_days
                 if fill_value is not None:
                     shifted = pl.col(source_col).shift(period, fill_value=fill_value)
                 else:
@@ -316,25 +317,28 @@ class DataProcessor():
         return lag_expressions, col_registry
 
     def _columns_within_window(self,
-                               col_registry: dict[tuple[int, int], list[str]],
-                               sum_to_limit_in_days: int,
-                               token_filter: str | None = None) -> list[str]:
+                           col_registry: dict[tuple[int, int], list[str]],
+                           start_from_days: int = 0,
+                           end_at_days: int | None = None,
+                           token_filter: str | None = None) -> list[str]:
         """
         Returns registry columns whose window ends within sum_to_limit_in_days,
         optionally restricted to those whose name contains token_filter.
         """
+        
         return [
             col
             for (start, end), cols in col_registry.items()
-            if end <= sum_to_limit_in_days
+            if start >= start_from_days and (end_at_days is None or end <= end_at_days)
             for col in cols
             if token_filter is None or token_filter in col
         ]
 
     def _generate_activity_feature_aggregation(self,
-                                               lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
-                                               interval_in_days: int = INTERVAL_IN_DAYS,
-                                               sum_to_limit_in_days: int = 56) -> tuple[list, ...]:
+
+                                           lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+                                           interval_in_days: int = INTERVAL_IN_DAYS,
+                                           sum_to_limit_in_days: int = 56) -> tuple[list, ...]:
         """
             Builds three-stage aggregation expressions for activity type features.
 
@@ -361,24 +365,23 @@ class DataProcessor():
                                     the final activity count features. Default 56.
 
             Returns:
-                Tuple of (agg, post_agg_1, post_agg_2, post_agg_3) where each element is
-                a list of Polars expressions to be applied sequentially.
+                Tuple of (agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep)
+                where each list is applied sequentially.
         """
-
 
         post_agg_2: list = []
         post_agg_3: list = []
         column_names_to_keep: list = []
         activity_types: list[str] = list(sorted(set(activity_type_groups.values())))
 
-
         # Building the first aggregation
-        agg: list = [(pl.col(ACTIVITY_TYPE_COL) == a).sum().alias(COL_TEMPLATE_FORMAT.format(
-                                                                                                a=a,
-                                                                                                start = 0,
-                                                                                                end   = interval_in_days)) for a in activity_types]
+        agg: list = [
+            (pl.col(ACTIVITY_TYPE_COL) == a).sum().alias(
+                COL_TEMPLATE_FORMAT.format(a=a, start=0, end=interval_in_days))
+            for a in activity_types
+        ]
 
-        # Shifting the columns by looback periods (lagged columns + window registry)
+        # Shifting the columns by lookback periods (lagged columns + window registry)
         base_columns = {
             a: COL_TEMPLATE_FORMAT.format(a=a, start=0, end=interval_in_days)
             for a in activity_types
@@ -387,34 +390,32 @@ class DataProcessor():
             base_columns, lookback_periods, interval_in_days, fill_value=0)
 
         columns_to_sum_over_for_total_activity_count = self._columns_within_window(
-            col_registry, sum_to_limit_in_days)
-
+            col_registry, end_at_days=sum_to_limit_in_days)
 
         # Building intermediate and final post aggregation processing script for total counts in the entire lookback window
-
-        total_actions_col_name=f"total_actions_{0}_{sum_to_limit_in_days}"
+        total_actions_col_name = f"total_actions_{0}_{sum_to_limit_in_days}"
         post_agg_2 += [
-            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_activity_count]).alias(total_actions_col_name)
+            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_activity_count])
+            .alias(total_actions_col_name)
         ]
 
         for activity_type in activity_types:
 
-            columns = self._columns_within_window(col_registry, sum_to_limit_in_days, token_filter=activity_type)
+            columns = self._columns_within_window(
+                col_registry, end_at_days=sum_to_limit_in_days, token_filter=activity_type)
 
-            column_name = COL_TEMPLATE_FORMAT.format(a=activity_type,
-                                                           start=0,
-                                                           end=sum_to_limit_in_days)
+            column_name = COL_TEMPLATE_FORMAT.format(a=activity_type, start=0, end=sum_to_limit_in_days)
             post_agg_2 += [
                 pl.sum_horizontal([pl.col(c) for c in columns])
-                .alias(column_name)]
+                .alias(column_name)
+            ]
 
             prop_column_name = f"prop_{activity_type}_{0}_{sum_to_limit_in_days}"
             post_agg_3 += [
-                (pl.col(column_name) / pl.col(total_actions_col_name)).alias(prop_column_name).fill_nan(0)
+                (pl.col(column_name) / pl.col(total_actions_col_name)).alias(prop_column_name).fill_nan(0),
             ]
 
             column_names_to_keep += [prop_column_name]
-
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
@@ -433,38 +434,81 @@ class DataProcessor():
 
         return agg, post_agg
 
-    def _generate_app_column_feature_aggregation(self) -> tuple[list, ...]:
+    def _generate_app_column_feature_aggregation(self,
+                                             lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+                                             interval_in_days: int = INTERVAL_IN_DAYS,
+                                             sum_to_limit_in_days: int = 56) -> tuple[list, ...]:
+        post_agg_1: list = []
+        post_agg_2: list = []
+        post_agg_3: list = []
+        column_names_to_keep: list = []
         apps: list[str] = list(app_type_groups.keys())
 
+        # Building the first aggregation
         agg: list = [
-            (pl.col(APP_COL) != "unknown").sum().alias("n_app_total")
-        ] + [
-            (pl.col(APP_COL) == app).sum().alias(f"n_{app}")
+            (pl.col(APP_COL) == app).sum().alias(
+                COL_TEMPLATE_FORMAT.format(a=app, start=0, end=interval_in_days))
             for app in apps
         ]
 
-        post_agg: list = [
-            (pl.col(f"n_{app}") / pl.col("n_app_total")).fill_nan(0.0).alias(f"prop_{app}")
+        # Shifting the columns by lookback periods (lagged columns + window registry)
+        base_columns = {
+            app: COL_TEMPLATE_FORMAT.format(a=app, start=0, end=interval_in_days)
             for app in apps
+        }
+        post_agg_1, col_registry = self._build_lagged_columns(
+            base_columns, lookback_periods, interval_in_days, fill_value=0)
+
+        columns_to_sum_over_for_total_app_count = self._columns_within_window(
+            col_registry, end_at_days=sum_to_limit_in_days)
+
+        # Building intermediate and final post aggregation processing script for total counts in the entire lookback window
+        total_app_col_name = f"total_app_{0}_{sum_to_limit_in_days}"
+        post_agg_2 += [
+            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_app_count])
+            .alias(total_app_col_name)
         ]
 
-        return agg, post_agg
+        for app in apps:
+
+            columns = self._columns_within_window(
+                col_registry, end_at_days=sum_to_limit_in_days, token_filter=app)
+
+            column_name = COL_TEMPLATE_FORMAT.format(a=app, start=0, end=sum_to_limit_in_days)
+            post_agg_2 += [
+                pl.sum_horizontal([pl.col(c) for c in columns])
+                .alias(column_name)
+            ]
+
+            prop_column_name = f"prop_{app}_{0}_{sum_to_limit_in_days}"
+            post_agg_3 += [
+                (pl.col(column_name) / pl.col(total_app_col_name)).alias(prop_column_name).fill_nan(0)
+            ]
+
+            column_names_to_keep += [prop_column_name]
+
+        return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
     def _generate_behaviour_features(self,
                                     lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                     interval_in_days: int = INTERVAL_IN_DAYS,
-                                    sum_to_limit_in_days: int = 56) -> tuple[list, ...]:
+                                    first_period: int = 28,
+                                    second_period: int = 56) -> tuple[list, ...]:
         agg: list = []
         post_agg_1: list = []
         post_agg_2: list = []
+        post_agg_3: list = []
+        column_names_to_keep: list = []
 
 
         last_activity_date_col = "last_activity_date"
-        days_since_last_activity_col = "days_since_last_activity"
+        days_since_last_activity_col = "recency"
         interval_end_col = "interval_end"
-        # Session count base column now follows COL_TEMPLATE_FORMAT so the lag helper
-        # and the window registry are consistent with the activity features.
-        session_base_col = COL_TEMPLATE_FORMAT.format(a="sessions", start=0, end=interval_in_days)
+        sessions_name = "sessions"
+        actions_name = "actions"
+
+        session_base_col = COL_TEMPLATE_FORMAT.format(a=sessions_name, start=0, end=interval_in_days)
+        action_base_col = COL_TEMPLATE_FORMAT.format(a=actions_name, start=0, end=interval_in_days)
 
         agg = [
             pl.col(ACTIVITY_DATE_COL).filter(pl.col(ACTIVITY_DATE_COL)
@@ -475,21 +519,103 @@ class DataProcessor():
             pl.col(ACTIVITY_DATE_COL).filter(pl.col(ACTIVITY_DATE_COL)
             .is_not_null())
             .n_unique()
-            .alias(session_base_col)
+            .alias(session_base_col),
+
+            pl.col(ACTIVITY_TYPE_COL).filter(pl.col(ACTIVITY_TYPE_COL) != "none")
+            .count()
+            .alias(action_base_col)
+
         ]
 
         post_agg_1 = [
             pl.col(last_activity_date_col).forward_fill().over(USER_ID_COL),
+            # This is the ending interval calculated by taking start interval + interval gap for recency
             (pl.col(INTERVAL_START_COL) + timedelta(days=interval_in_days)).alias(interval_end_col)]
 
-        # Lag the session counts using the shared helper (no fill, matching prior logic)
+        # Laging session counts
         session_lags, session_registry = self._build_lagged_columns(
-            {"sessions": session_base_col}, lookback_periods, interval_in_days)
+            {sessions_name: session_base_col}, lookback_periods, interval_in_days, fill_value=0)
         post_agg_1 += session_lags
 
-        post_agg_2 = [(pl.col(interval_end_col) - pl.col(last_activity_date_col)).alias(days_since_last_activity_col)]
-        return agg, post_agg_1, post_agg_2
+        # Lagging action counts
+        action_lags, action_registry = self._build_lagged_columns(
+            {actions_name: action_base_col}, lookback_periods, interval_in_days, fill_value=0)
+        post_agg_1 += action_lags
 
+
+        # --- Sessions: window sums + drift ---
+        columns_to_sum_first_window_sessions = self._columns_within_window(
+            session_registry,
+            start_from_days=0,
+            end_at_days=first_period)
+
+        columns_to_sum_second_window_sessions = self._columns_within_window(
+            session_registry,
+            start_from_days=first_period,
+            end_at_days=second_period)
+
+        shorter_lookback_name_session = COL_TEMPLATE_FORMAT.format(a=sessions_name,
+                                                                start=0,
+                                                                end=first_period)
+
+        longer_lookback_name_session = COL_TEMPLATE_FORMAT.format(a=sessions_name,
+                                                                start=first_period,
+                                                                end=second_period)
+
+        # Session count with lookbacks
+        post_agg_2 += [pl.sum_horizontal([col for col in columns_to_sum_first_window_sessions])
+                    .alias(shorter_lookback_name_session),
+                    pl.sum_horizontal([col for col in columns_to_sum_second_window_sessions])
+                    .alias(longer_lookback_name_session)]
+
+        session_intensity_drift_col = "sessions_intensity_drift_0_28_vs_28_56_days"
+        post_agg_3 += [(pl.col(shorter_lookback_name_session).cast(pl.Int32) - pl.col(longer_lookback_name_session).cast(pl.Int32)).alias(session_intensity_drift_col)]
+
+
+        # --- Actions: window sums + drift ---
+        columns_to_sum_first_window_actions = self._columns_within_window(
+            action_registry,
+            start_from_days=0,
+            end_at_days=first_period)
+
+        columns_to_sum_second_window_actions = self._columns_within_window(
+            action_registry,
+            start_from_days=first_period,
+            end_at_days=second_period)
+
+        shorter_lookback_name_action = COL_TEMPLATE_FORMAT.format(a=actions_name,
+                                                                start=0,
+                                                                end=first_period)
+
+        longer_lookback_name_action = COL_TEMPLATE_FORMAT.format(a=actions_name,
+                                                                start=first_period,
+                                                                end=second_period)
+
+        # Action count with lookbacks
+        post_agg_2 += [pl.sum_horizontal([col for col in columns_to_sum_first_window_actions])
+                    .alias(shorter_lookback_name_action),
+                    pl.sum_horizontal([col for col in columns_to_sum_second_window_actions])
+                    .alias(longer_lookback_name_action)]
+
+        action_intensity_drift_col = "actions_intensity_drift_0_28_vs_28_56_days"
+        post_agg_3 += [(pl.col(shorter_lookback_name_action).cast(pl.Int32) - pl.col(longer_lookback_name_action).cast(pl.Int32)).alias(action_intensity_drift_col)]
+
+
+        # Recency
+        post_agg_2 += [(pl.col(interval_end_col) - pl.col(last_activity_date_col)).alias(days_since_last_activity_col)]
+
+
+        column_names_to_keep += [
+            shorter_lookback_name_session,
+            session_intensity_drift_col,
+            shorter_lookback_name_action,
+            action_intensity_drift_col,
+            days_since_last_activity_col]
+
+
+        return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
+    
+    
     def apply_feature_engineering(self,
                                    df: pl.DataFrame,
                                    churn_adjusted_date_col_name: str | None = None,
@@ -511,7 +637,7 @@ class DataProcessor():
             post_agg_3 = []
             agg_af, post_agg_1_af, post_agg_2_af, post_agg_3_af, column_names_to_keep = self._generate_activity_feature_aggregation(lookback_periods,
                                                                                                            interval_in_days)
-            agg_b, post_agg_1_b, post_agg_2_b = self._generate_behaviour_features()
+            agg_b, post_agg_1_b, post_agg_2_b, post_agg_3_b, column_names_to_keep  = self._generate_behaviour_features()
             # agg_app, post_agg_app = self._generate_app_column_feature_aggregation()
             # agg_v, post_agg_v = self._generate_vehicle_make_feature_aggregation()
 
@@ -522,15 +648,15 @@ class DataProcessor():
             agg +=  agg_b
             post_agg_1 += post_agg_1_b
             post_agg_2 += post_agg_2_b
-            post_agg_3 += post_agg_3_af
+            post_agg_3 += post_agg_3_b
 
             d = df_with_intervals\
                 .group_by(group_and_sort_by_columns)\
                 .agg(agg)\
                 .sort(group_and_sort_by_columns)\
-                # .with_columns(post_agg_1)\
-                # .with_columns(post_agg_2)\
-                # .with_columns(post_agg_3)\
+                .with_columns(post_agg_1)\
+                .with_columns(post_agg_2)\
+                .with_columns(post_agg_3)\
 
             # print(d.columns)
 
