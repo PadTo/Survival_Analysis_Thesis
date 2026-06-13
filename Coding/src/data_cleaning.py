@@ -73,7 +73,8 @@ class DataCleaner:
 
     def basic_filter_and_merge_df(self,
                                   filter_nan_cols: list[str] | None = None,
-                                  user_id_col_name: str = USER_ID_COL) -> pd.DataFrame:
+                                  user_id_col_name: str = USER_ID_COL,
+                                  vehicle_id_col_name: str = VEHICLE_ID_COL) -> pd.DataFrame:
         """
         Merges vehicle metadata with activity logs and applies basic cleaning.
 
@@ -93,6 +94,21 @@ class DataCleaner:
         Returns:
             Merged and cleaned DataFrame.
         """
+
+        # Filtering users with duplicate vehicle id's, but different vehicle characteristics
+        dupe_users = (
+            self.df_vehicle
+            .groupby([user_id_col_name, vehicle_id_col_name])[vehicle_id_col_name]
+            .count()
+            .gt(1)
+            .groupby(level=0)
+            .any()
+        )
+        dupe_user_ids = dupe_users[dupe_users].index
+
+        self.df_vehicle = self.df_vehicle[~self.df_vehicle[user_id_col_name].isin(dupe_user_ids)]
+
+
         print(f"Rows before merging: {len(self.df_activity)}")
         df = self.df_vehicle.merge(self.df_activity, on=MERGE_KEYS, how="right")
         print(f"Rows after merging: {len(df)}")
