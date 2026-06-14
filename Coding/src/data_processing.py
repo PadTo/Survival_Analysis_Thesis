@@ -21,6 +21,7 @@ from .constants.columns import (
 
 LOOKBACK_PERIODS = (1,2,3)
 INTERVAL_IN_DAYS: int = 14
+SUM_TO_LIMIT_IN_DAYS = 56
 N_NEIGHBOURS = 5
 COL_TEMPLATE_FORMAT = "n_{a}_{start}_{end}_days"
 
@@ -338,7 +339,7 @@ class DataProcessor():
 
                                            lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                            interval_in_days: int = INTERVAL_IN_DAYS,
-                                           sum_to_limit_in_days: int = 56) -> tuple[list, ...]:
+                                           sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS) -> tuple[list, ...]:
         """
             Builds three-stage aggregation expressions for activity type features.
 
@@ -369,6 +370,7 @@ class DataProcessor():
                 where each list is applied sequentially.
         """
 
+        post_agg_1: list = []
         post_agg_2: list = []
         post_agg_3: list = []
         column_names_to_keep: list = []
@@ -437,7 +439,9 @@ class DataProcessor():
     def _generate_app_column_feature_aggregation(self,
                                              lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                              interval_in_days: int = INTERVAL_IN_DAYS,
-                                             sum_to_limit_in_days: int = 56) -> tuple[list, ...]:
+                                             sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
+                                             first_period: int = 28,
+                                             second_period: int = 56) -> tuple[list, ...]:
         post_agg_1: list = []
         post_agg_2: list = []
         post_agg_3: list = []
@@ -459,35 +463,78 @@ class DataProcessor():
         post_agg_1, col_registry = self._build_lagged_columns(
             base_columns, lookback_periods, interval_in_days, fill_value=0)
 
+        # Total app counts across the full lookback window
         columns_to_sum_over_for_total_app_count = self._columns_within_window(
             col_registry, end_at_days=sum_to_limit_in_days)
 
-        # Building intermediate and final post aggregation processing script for total counts in the entire lookback window
-        total_app_col_name = f"total_app_{0}_{sum_to_limit_in_days}"
+        # Total app counts split into first and second period windows (denominators for proportions)
+        columns_to_sum_first_window_app = self._columns_within_window(
+            col_registry, start_from_days=0, end_at_days=first_period)
+
+        columns_to_sum_second_window_app = self._columns_within_window(
+            col_registry, start_from_days=first_period, end_at_days=second_period)
+
+        total_app_name = "total_app"
+        total_app_col_name_0_56  = COL_TEMPLATE_FORMAT.format(a=total_app_name, start=0,            end=sum_to_limit_in_days)
+        total_app_0_28_col_name  = COL_TEMPLATE_FORMAT.format(a=total_app_name, start=0,            end=first_period)
+        total_app_28_56_col_name = COL_TEMPLATE_FORMAT.format(a=total_app_name, start=first_period, end=second_period)
+
         post_agg_2 += [
-            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_app_count])
-            .alias(total_app_col_name)
+            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_app_count]).alias(total_app_col_name_0_56),
+            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_first_window_app]).alias(total_app_0_28_col_name),
+            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_second_window_app]).alias(total_app_28_56_col_name),
         ]
 
-        for app in apps:
+        # main counts in both windows (only main needed - vag is implicit as 1 - prop_main)
+        main_token = list(base_columns.keys())[0]
 
+        cols_main_0_28  = self._columns_within_window(col_registry, start_from_days=0,            end_at_days=first_period,  token_filter=main_token)
+        cols_main_28_56 = self._columns_within_window(col_registry, start_from_days=first_period, end_at_days=second_period, token_filter=main_token)
+
+        main_0_28_col  = COL_TEMPLATE_FORMAT.format(a=main_token, start=0,            end=first_period)
+        main_28_56_col = COL_TEMPLATE_FORMAT.format(a=main_token, start=first_period, end=second_period)
+
+        post_agg_2 += [
+            pl.sum_horizontal([pl.col(c) for c in cols_main_0_28]).alias(main_0_28_col),
+            pl.sum_horizontal([pl.col(c) for c in cols_main_28_56]).alias(main_28_56_col),
+        ]
+
+        # Per-app proportion over the full 0-56 window
+        for app in apps:
             columns = self._columns_within_window(
                 col_registry, end_at_days=sum_to_limit_in_days, token_filter=app)
 
-            column_name = COL_TEMPLATE_FORMAT.format(a=app, start=0, end=sum_to_limit_in_days)
+            column_name_0_56 = COL_TEMPLATE_FORMAT.format(a=app, start=0, end=sum_to_limit_in_days)
+            prop_column_name_0_56 = f"prop_{app}_{0}_{sum_to_limit_in_days}"
+
             post_agg_2 += [
-                pl.sum_horizontal([pl.col(c) for c in columns])
-                .alias(column_name)
+                pl.sum_horizontal([pl.col(c) for c in columns]).alias(column_name_0_56)
             ]
 
-            prop_column_name = f"prop_{app}_{0}_{sum_to_limit_in_days}"
             post_agg_3 += [
-                (pl.col(column_name) / pl.col(total_app_col_name)).alias(prop_column_name).fill_nan(0)
+                (pl.col(column_name_0_56) / pl.col(total_app_col_name_0_56))
+                .alias(prop_column_name_0_56).fill_nan(0)
             ]
 
-            column_names_to_keep += [prop_column_name]
+        # main proportion in each window + drift (prop_main_0_28 - prop_main_28_56)
+        prop_main_0_28_col  = f"prop_{main_token}_{0}_{first_period}"
+        prop_main_28_56_col = f"prop_{main_token}_{first_period}_{second_period}"
+        prop_main_0_56_col  = f"prop_{main_token}_{0}_{second_period}"
+        main_drift_col      = f"prop_{main_token}_drift_{0}_{first_period}_vs_{first_period}_{second_period}"
 
-        return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
+        post_agg_3 += [
+            (pl.col(main_0_28_col)  / pl.col(total_app_0_28_col_name)).alias(prop_main_0_28_col).fill_nan(0),
+            (pl.col(main_28_56_col) / pl.col(total_app_28_56_col_name)).alias(prop_main_28_56_col).fill_nan(0),
+        ]
+
+        # Drift requires prop columns to exist
+        post_agg_4: list = [
+            (pl.col(prop_main_0_28_col) - pl.col(prop_main_28_56_col)).alias(main_drift_col)
+        ]
+
+        column_names_to_keep += [prop_main_0_56_col, main_drift_col]
+
+        return agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, column_names_to_keep
 
     def _generate_behaviour_features(self,
                                     lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
@@ -514,16 +561,16 @@ class DataProcessor():
             pl.col(ACTIVITY_DATE_COL).filter(pl.col(ACTIVITY_DATE_COL)
             .is_not_null())
             .max()
-            .alias(last_activity_date_col),
+            .alias(last_activity_date_col), # Computing last activity in an interval
 
             pl.col(ACTIVITY_DATE_COL).filter(pl.col(ACTIVITY_DATE_COL)
             .is_not_null())
             .n_unique()
-            .alias(session_base_col),
+            .alias(session_base_col), # Computing number of unique sessions per interval, counted only for unique days
 
             pl.col(ACTIVITY_TYPE_COL).filter(pl.col(ACTIVITY_TYPE_COL) != "none")
             .count()
-            .alias(action_base_col)
+            .alias(action_base_col) # Computing number of actions per interval
 
         ]
 
@@ -620,7 +667,10 @@ class DataProcessor():
                                    df: pl.DataFrame,
                                    churn_adjusted_date_col_name: str | None = None,
                                    interval_in_days: int = INTERVAL_IN_DAYS,
-                                   lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS) -> pl.DataFrame | None:
+                                   lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+                                   sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
+                                   first_period: int = 28,
+                                   second_period: int = 56) -> pl.DataFrame | None:
 
         churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
 
@@ -628,16 +678,30 @@ class DataProcessor():
             group_and_sort_by_columns = [USER_ID_COL, INTERVAL_START_COL]
             df = self._prepare_df(df, churn_adjusted_date_col_name)
             df_with_intervals = self._generate_intervals(df, churn_adjusted_date_col_name, interval_in_days)
-            # print(df_with_intervals)
-            print(df_with_intervals.select(pl.col(ACTIVITY_DATE_COL)))
+       
 
-            agg = []
-            post_agg_1 = []
-            post_agg_2 = []
-            post_agg_3 = []
-            agg_af, post_agg_1_af, post_agg_2_af, post_agg_3_af, column_names_to_keep = self._generate_activity_feature_aggregation(lookback_periods,
-                                                                                                           interval_in_days)
-            agg_b, post_agg_1_b, post_agg_2_b, post_agg_3_b, column_names_to_keep  = self._generate_behaviour_features()
+            agg: list = []
+            post_agg_1: list = []
+            post_agg_2: list = []
+            post_agg_3: list = []
+            post_agg_4: list = []
+            column_names_to_keep: list = []
+
+            agg_af, post_agg_1_af, post_agg_2_af, post_agg_3_af, column_names_to_keep_af = \
+                self._generate_activity_feature_aggregation(
+                lookback_periods,
+                interval_in_days)
+            
+            agg_app, post_agg_1_app, post_agg_2_app, post_agg_3_app, post_agg_4_app, column_names_to_keep_app = \
+                self._generate_app_column_feature_aggregation(
+                lookback_periods,
+                interval_in_days,
+                sum_to_limit_in_days
+            )
+            agg_b, post_agg_1_b, post_agg_2_b, post_agg_3_b, column_names_to_keep_b  = \
+                self._generate_behaviour_features(
+                lookback_periods,
+                interval_in_days)
             # agg_app, post_agg_app = self._generate_app_column_feature_aggregation()
             # agg_v, post_agg_v = self._generate_vehicle_make_feature_aggregation()
 
@@ -645,10 +709,12 @@ class DataProcessor():
             # post_agg += post_agg_app + post_agg_v + [pl.col("user_id"), pl.col("interval_start")]
 
 
-            agg +=  agg_b
-            post_agg_1 += post_agg_1_b
-            post_agg_2 += post_agg_2_b
-            post_agg_3 += post_agg_3_b
+            agg +=  agg_app
+            column_names_to_keep += column_names_to_keep_app
+            post_agg_1 += post_agg_1_app
+            post_agg_2 += post_agg_2_app
+            post_agg_3 += post_agg_3_app
+            post_agg_4 += post_agg_4_app
 
             d = df_with_intervals\
                 .group_by(group_and_sort_by_columns)\
@@ -657,13 +723,16 @@ class DataProcessor():
                 .with_columns(post_agg_1)\
                 .with_columns(post_agg_2)\
                 .with_columns(post_agg_3)\
+                .with_columns(post_agg_4)\
+                .select(column_names_to_keep)
 
             # print(d.columns)
 
             # print(d.sort(["user_id","interval_start"]))
             # print(d.columns)
             print(d)
-            # print(d)
+            print(d.columns)
+            return d
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
 
@@ -680,4 +749,4 @@ dp = DataProcessor(df_vh)
 # dp.feature_engineering(df_vh)
 
 # dp._generate_activity_feature_aggregation()
-dp.apply_feature_engineering(df_vh)
+d: pl.DataFrame = dp.apply_feature_engineering(df_vh)
