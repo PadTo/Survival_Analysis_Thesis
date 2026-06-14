@@ -8,9 +8,9 @@ brand_group_map = {
     "mini": "bmw_group",
     "bmw moto": "bmw_group",
 
-    "porsche": "premium_rare",
-    "lamborghini": "premium_rare",
-    "bentley": "premium_rare",
+    "porsche": "premium",
+    "lamborghini": "premium",
+    "bentley": "premium",
 
     "mercedes-benz": "other_rare",
     "ford": "other_rare",
@@ -27,7 +27,7 @@ activity_type_groups = {
     "clear": "clear",
     "history_screen": "history_screen",
     "live_data": "live_data",
-    "native_live_data": "live_data",
+    "native_live_data": "other",
     "vehicle_lookup": "other",
     "mileage_rollback": "other",
     "cba_checklist": "other",
