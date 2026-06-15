@@ -207,7 +207,8 @@ class DataProcessor():
                 .str.strip_chars()
                 .replace(brand_group_map)
         )
-
+        
+        df = df.to_dummies(VEHICLE_MAKE_COL)
         return df
 
     def _generate_intervals(self,
@@ -247,7 +248,6 @@ class DataProcessor():
         df_with_intervals = df_with_intervals.with_columns([
             pl.col(CHURN_TRIGGERED_COL).fill_null(False),
             pl.col(VEHICLE_ID_COL).fill_null("unknown"),
-            pl.col(VEHICLE_MAKE_COL).fill_null("unknown"),
             pl.col(VEHICLE_MODEL_COL).fill_null("unknown"),
             pl.col(VEHICLE_START_YEAR_COL).fill_null(0),
             pl.col(VEHICLE_END_YEAR_COL).fill_null(0),
@@ -421,7 +421,7 @@ class DataProcessor():
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
-    def _generate_vehicle_make_feature_aggregation(self) -> tuple[list, ...]:
+    def _generate_vehicle_characteristics_feature_aggregation(self) -> tuple[list, ...]:
         make_groups: list[str] = list(set(brand_group_map.values()))
 
         agg: list = [
@@ -662,7 +662,6 @@ class DataProcessor():
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
     
-    
     def apply_feature_engineering(self,
                                    df: pl.DataFrame,
                                    churn_adjusted_date_col_name: str | None = None,
@@ -678,7 +677,9 @@ class DataProcessor():
             group_and_sort_by_columns = [USER_ID_COL, INTERVAL_START_COL]
             df = self._prepare_df(df, churn_adjusted_date_col_name)
             df_with_intervals = self._generate_intervals(df, churn_adjusted_date_col_name, interval_in_days)
-       
+
+
+            print(df)
 
             agg: list = []
             post_agg_1: list = []
@@ -709,30 +710,25 @@ class DataProcessor():
             # post_agg += post_agg_app + post_agg_v + [pl.col("user_id"), pl.col("interval_start")]
 
 
-            agg +=  agg_app
-            column_names_to_keep += column_names_to_keep_app
-            post_agg_1 += post_agg_1_app
-            post_agg_2 += post_agg_2_app
-            post_agg_3 += post_agg_3_app
-            post_agg_4 += post_agg_4_app
+            # agg +=  agg_app
+            # column_names_to_keep += column_names_to_keep_app
+            # post_agg_1 += post_agg_1_app
+            # post_agg_2 += post_agg_2_app
+            # post_agg_3 += post_agg_3_app
+            # post_agg_4 += post_agg_4_app
 
-            d = df_with_intervals\
-                .group_by(group_and_sort_by_columns)\
-                .agg(agg)\
-                .sort(group_and_sort_by_columns)\
-                .with_columns(post_agg_1)\
-                .with_columns(post_agg_2)\
-                .with_columns(post_agg_3)\
-                .with_columns(post_agg_4)\
-                .select(column_names_to_keep)
-
+            # d = df_with_intervals\
+            #     .group_by(group_and_sort_by_columns)\
+            #     .agg(agg)\
+            #     .sort(group_and_sort_by_columns)\
+            #     .with_columns(post_agg_1)\
+            #     .with_columns(post_agg_2)\
+            #     .with_columns(post_agg_3)\
+            #     .with_columns(post_agg_4)\
+            #     .select(column_names_to_keep)
+            # print(d)
             # print(d.columns)
-
-            # print(d.sort(["user_id","interval_start"]))
-            # print(d.columns)
-            print(d)
-            print(d.columns)
-            return d
+            # return d
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
 
