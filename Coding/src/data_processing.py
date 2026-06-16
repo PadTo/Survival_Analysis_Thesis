@@ -517,7 +517,7 @@ class DataProcessor():
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
-    def _generate_vehicle_characteristics_feature_aggregation(self,
+    def _generate_vehicle_characteristics_features_aggregation(self,
                                                           vehicle_make_col_names: list,
                                                           interval_in_days: int = INTERVAL_IN_DAYS) -> tuple[list, ...]:
         """
@@ -636,7 +636,7 @@ class DataProcessor():
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
-    def _generate_app_column_feature_aggregation(self,
+    def _generate_app_column_features_aggregation(self,
                                              lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                              interval_in_days: int = INTERVAL_IN_DAYS,
                                              sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
@@ -741,7 +741,7 @@ class DataProcessor():
         column_names_to_keep += [prop_main_0_56_col, main_drift_col]
 
         return agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, column_names_to_keep
-    
+
     def _generate_behaviour_features_aggregation(self,
                                     lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                     interval_in_days: int = INTERVAL_IN_DAYS,
@@ -873,6 +873,7 @@ class DataProcessor():
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
+    # def _generate_churn_triggered_feature_agg
     def apply_feature_engineering(self,
                                    df: pl.DataFrame,
                                    churn_adjusted_date_col_name: str | None = None,
@@ -926,7 +927,7 @@ class DataProcessor():
                     interval_in_days)
 
             agg_app, post_agg_1_app, post_agg_2_app, post_agg_3_app, post_agg_4_app, column_names_to_keep_app = \
-                self._generate_app_column_feature_aggregation(
+                self._generate_app_column_features_aggregation(
                     lookback_periods,
                     interval_in_days,
                     sum_to_limit_in_days
@@ -938,7 +939,7 @@ class DataProcessor():
 
 
             agg_vehicle, post_agg_1_vehicle, post_agg_2_vehicle,post_agg_3_vehicle, column_names_to_keep_vehicle = \
-                self._generate_vehicle_characteristics_feature_aggregation(
+                self._generate_vehicle_characteristics_features_aggregation(
                     vehicle_make_column_names,
                     interval_in_days)
 
