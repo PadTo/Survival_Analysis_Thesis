@@ -66,11 +66,11 @@ INTERVAL_END_COL: str = "interval_end"
 PROP_IN_PROD_COL: str = "prop_in_prod"
 CUMULATIVE_COUNT_TOTAL_COL: str = "cumulative_count_total"
 MEAN_AGE_INTERMEDIATE_COL: str = "vehicle_mean_age_intermediate"   # dropped before output, only feeds the forward-fill
-
 VEHICLE_AGE_COLUMN_NAME: str = "vehicle_age"
 VEHICLE_MEAN_AGE_COLUMN_NAME: str = "vehicle_mean_age_in_an_interval"
 VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME: str = "vehicle_mean_age_overall"
 FIRST_DISTINCT_COLUMN_NAME: str = "first_distinct"
+CHURN_TRIGGERED_SHIFTED_COLUMN_NAME = "churn_triggered_adjusted"
 
 
 
@@ -873,7 +873,28 @@ class DataProcessor():
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
-    # def _generate_churn_triggered_feature_agg
+    def _generate_churn_triggered_features_agg(self,
+                                            lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+                                            interval_in_days: int = INTERVAL_IN_DAYS,
+                                            first_period: int = FIRST_PERIOD_IN_DAYS,
+                                            second_period: int = SECOND_PERIOD_IN_DAYS)-> tuple[list,...]:
+        
+        agg: list = []
+        post_agg_1: list = []
+        column_names_to_keep: list = []
+
+
+        agg += [pl.col(CHURN_TRIGGERED_COL).max()]
+        post_agg_1 += [pl.col(CHURN_TRIGGERED_COL)
+                       # Even though churn is triggered in the last period, the feature values
+                       # must be taken from the previous period (shifting for correct assignment)
+                       .shift(-1)
+                       .fill_null(False) # This does not matter as much because the last row will be removed either way (incomplete intervals)
+                       .alias(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)]
+        
+        column_names_to_keep += [CHURN_TRIGGERED_SHIFTED_COLUMN_NAME]
+        return agg, post_agg_1, column_names_to_keep
+
     def apply_feature_engineering(self,
                                    df: pl.DataFrame,
                                    churn_adjusted_date_col_name: str | None = None,
@@ -942,20 +963,25 @@ class DataProcessor():
                 self._generate_vehicle_characteristics_features_aggregation(
                     vehicle_make_column_names,
                     interval_in_days)
+            
+            agg_churn, post_agg_1_churn, column_names_to_keep_churn = \
+                self._generate_churn_triggered_features_agg()
 
 
-            agg += agg_af + agg_app + agg_b + agg_vehicle
+            agg += agg_af + agg_app + agg_b + agg_vehicle + agg_churn
 
-            column_names_to_keep += [USER_ID_COL]
+    
+            column_names_to_keep += [USER_ID_COL, INTERVAL_START_COL]
             column_names_to_keep += (
                 column_names_to_keep_af +
                 column_names_to_keep_app +
                 column_names_to_keep_b +
-                column_names_to_keep_vehicle
+                column_names_to_keep_vehicle +
+                column_names_to_keep_churn
             )
 
-
-            post_agg_1 += post_agg_1_af + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle
+         
+            post_agg_1 += post_agg_1_af + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle + post_agg_1_churn
             post_agg_2 += post_agg_2_af + post_agg_2_app + post_agg_2_b + post_agg_2_vehicle
             post_agg_3 += post_agg_3_af + post_agg_3_app + post_agg_3_b + post_agg_3_vehicle
             post_agg_4 += post_agg_4_app
@@ -971,8 +997,10 @@ class DataProcessor():
                 .with_columns(post_agg_4)
                 .select(column_names_to_keep)
             )
-
+            
             print(d)
+            print(d.columns)
+            
             return d
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
@@ -984,13 +1012,4 @@ class DataProcessor():
 
 df_vh = pl.read_csv(Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\interim\personal_users_dataset.csv"))
 dp = DataProcessor(df_vh)
-# df = dp.KNN_impute_vehicle_start_year(df_vh)
-# dp.split_train_val_test(df_vh)
-
-# dp.feature_engineering(df_vh)
-
-# dp._generate_activity_feature_aggregation()
 d: pl.DataFrame = dp.apply_feature_engineering(df_vh)
-
-# print(d.select([USER_ID_COL, INTERVAL_START_COL, "n_vehicle_make_bmw_group_0_14_days"]).sort([USER_ID_COL, INTERVAL_START_COL]))
-# print(d.select([USER_ID_COL, INTERVAL_START_COL, "cummulative_count_vehicle_make_bmw_group"]).sort([USER_ID_COL, INTERVAL_START_COL]))
