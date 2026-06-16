@@ -25,6 +25,7 @@ SUM_TO_LIMIT_IN_DAYS = 56
 N_NEIGHBOURS = 5
 VEHICLE_AGE_COLUMN_NAME = "vehicle_age"
 VEHICLE_MEAN_AGE_COLUMN_NAME = "vehicle_mean_age_in_an_interval"
+VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME = "vehicle_mean_age_overall"
 FIRST_DISTINCT_COLUMN_NAME = "first_distinct"
 COL_TEMPLATE_FORMAT = "n_{a}_{start}_{end}_days"
 
@@ -473,16 +474,16 @@ class DataProcessor():
                                                           vehicle_make_col_names: list,
                                                           interval_in_days: int = INTERVAL_IN_DAYS) -> tuple[list, ...]:
         """
-        Builds make-portfolio features from the one-hot make columns.
+            Builds make-portfolio features from the one-hot make columns.
 
-        Counts accumulate cumulatively per user rather than resetting per interval:
-        the set of makes a user has connected is a slow-moving characteristic of who
-        they are, not a per-window behaviour. From the running counts it derives a
-        dominant-make flag (the user's primary make so far) and each make's overall
-        share. Cumulative counts themselves are intermediates and are not kept.
+            Counts accumulate cumulatively per user rather than resetting per interval:
+            the set of makes a user has connected is a slow-moving characteristic of who
+            they are, not a per-window behaviour. From the running counts it derives each
+            make's overall share. Cumulative counts themselves are intermediates and are
+            not kept.
 
-        Returns:
-            Tuple of (agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep).
+            Returns:
+                Tuple of (agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep).
         """
 
         agg: list = []
@@ -494,14 +495,28 @@ class DataProcessor():
         cum_count_col_names: list = []
         total_cum_count_col = "cumulative_count_total"
 
-
+    
         agg += [(pl.col(VEHICLE_AGE_COLUMN_NAME))
                 .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True )
-                        & 
+                        &
                         (pl.col(VEHICLE_MAKE_COL) != "unknown"))
                 .mean()
                 .alias(VEHICLE_MEAN_AGE_COLUMN_NAME)]
         
+        dummy_name = "dummy"
+        post_agg_1 += [(pl.col(VEHICLE_MEAN_AGE_COLUMN_NAME)
+                        .cum_sum()
+                        .truediv(pl.col(VEHICLE_MEAN_AGE_COLUMN_NAME).cum_count()))
+                        .alias(dummy_name) ] # Can't forward fill inplace -> assigning dummy column
+        
+        # Null values for intervals with no activity -> forward fill to carry information from 
+        # previous periods
+        post_agg_2 += [pl.col(dummy_name)
+                       .forward_fill()
+                       .alias(VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME)
+                       .over(USER_ID_COL)]
+
+        column_names_to_keep += [VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME]
 
         for vehicle_make_col_name in vehicle_make_col_names:
 
@@ -516,27 +531,18 @@ class DataProcessor():
             cum_count_col_names += [cum_count_col_name]
 
             agg += [(pl.col(vehicle_make_col_name) == 1).sum().alias(n_count_col_name)]
-           
+
             # Accumulating per user so the count reflects the whole garage seen up to each interval
             post_agg_1 += [pl.col(n_count_col_name)
                         .cum_sum()
                         .over(pl.col(USER_ID_COL))
                         .alias(cum_count_col_name)]
 
-        
+
         # Total across makes is the denominator for the per-make shares
         post_agg_2 += [
             pl.sum_horizontal([pl.col(c) for c in cum_count_col_names])
             .alias(total_cum_count_col)
-        ]
-
-        # Dominant make is the row-wise argmax over cumulative counts, flagged 1 for the leader
-        dominant_col_name = "dominant_{name}"
-        post_agg_2 += [
-            (pl.col(col) == pl.max_horizontal([pl.col(c) for c in cum_count_col_names]))
-            .cast(pl.Int8)
-            .alias(dominant_col_name.format(name=col))
-            for col in cum_count_col_names
         ]
 
         prop_col_name_template = "overall_prop_{vehicle_make_col_name}"
@@ -547,7 +553,6 @@ class DataProcessor():
             for col in cum_count_col_names
         ]
 
-        column_names_to_keep += [dominant_col_name.format(name=col) for col in cum_count_col_names]
         column_names_to_keep += [
             prop_col_name_template.format(vehicle_make_col_name=col.replace("cumulative_count_", ""))
             for col in cum_count_col_names
@@ -868,7 +873,8 @@ class DataProcessor():
 
             agg_vehicle, post_agg_1_vehicle, post_agg_2_vehicle,post_agg_3_vehicle, column_names_to_keep_vehicle = \
                 self._generate_vehicle_characteristics_feature_aggregation(
-                    vehicle_make_column_names)
+                    vehicle_make_column_names,
+                    interval_in_days)
 
 
             agg +=  agg_vehicle
@@ -883,13 +889,13 @@ class DataProcessor():
                 .group_by(group_and_sort_by_columns)\
                 .agg(agg)\
                 .sort(group_and_sort_by_columns)\
-                # .with_columns(post_agg_1)\
-                # .with_columns(post_agg_2)\
-                # .with_columns(post_agg_3)\
-                # .select(column_names_to_keep)
+                .with_columns(post_agg_1)\
+                .with_columns(post_agg_2)\
+                .with_columns(post_agg_3)\
+                .select(column_names_to_keep)
                 # .with_columns(post_agg_4)\
-                # .select(column_names_to_keep)
 
+            print(d)
             return d
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
@@ -908,6 +914,6 @@ dp = DataProcessor(df_vh)
 
 # dp._generate_activity_feature_aggregation()
 d: pl.DataFrame = dp.apply_feature_engineering(df_vh)
-print(d)
+
 # print(d.select([USER_ID_COL, INTERVAL_START_COL, "n_vehicle_make_bmw_group_0_14_days"]).sort([USER_ID_COL, INTERVAL_START_COL]))
 # print(d.select([USER_ID_COL, INTERVAL_START_COL, "cummulative_count_vehicle_make_bmw_group"]).sort([USER_ID_COL, INTERVAL_START_COL]))
