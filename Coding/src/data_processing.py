@@ -24,6 +24,7 @@ INTERVAL_IN_DAYS: int = 14
 SUM_TO_LIMIT_IN_DAYS = 56
 N_NEIGHBOURS = 5
 VEHICLE_AGE_COLUMN_NAME = "vehicle_age"
+VEHICLE_MEAN_AGE_COLUMN_NAME = "vehicle_mean_age_in_an_interval"
 FIRST_DISTINCT_COLUMN_NAME = "first_distinct"
 COL_TEMPLATE_FORMAT = "n_{a}_{start}_{end}_days"
 
@@ -218,11 +219,15 @@ class DataProcessor():
 
         # Creating an age column of a vehicle later needed when computing mean age of fleet per user per history
         df = df.with_columns((pl.col(VEHICLE_END_YEAR_COL) - pl.col(VEHICLE_START_YEAR_COL)).alias(VEHICLE_AGE_COLUMN_NAME))
-    
+        
+        # Setting aside vehicle make column to concatenate it later (needed for mean age feature aggregation computations)
+        df_make_col = df.select(pl.col(VEHICLE_MAKE_COL))
+
         # One-hot encoding make so each group becomes a 0/1 column that can be summed per interval
         df = df.to_dummies(VEHICLE_MAKE_COL)
+        df = pl.concat([df, df_make_col],how="horizontal")
 
-        vehicle_make_column_names = [c for c in df.columns if (c.lower().strip()).startswith(VEHICLE_MAKE_COL)]
+        vehicle_make_column_names = [c for c in df.columns if (c.lower().strip()).startswith(f"{VEHICLE_MAKE_COL}_")]
 
 
         return (df, vehicle_make_column_names)
@@ -292,6 +297,7 @@ class DataProcessor():
             pl.col(CHURN_TRIGGERED_COL).fill_null(False),
             pl.col(VEHICLE_ID_COL).fill_null("unknown"),
             pl.col(VEHICLE_MODEL_COL).fill_null("unknown"),
+            pl.col(VEHICLE_MAKE_COL).fill_null("unknown"),
             pl.col(VEHICLE_START_YEAR_COL).fill_null(0),
             pl.col(VEHICLE_END_YEAR_COL).fill_null(0),
             pl.col(VEHICLE_MILEAGE_COL).fill_null("unknown"),
@@ -488,6 +494,15 @@ class DataProcessor():
         cum_count_col_names: list = []
         total_cum_count_col = "cumulative_count_total"
 
+
+        agg += [(pl.col(VEHICLE_AGE_COLUMN_NAME))
+                .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True )
+                        & 
+                        (pl.col(VEHICLE_MAKE_COL) != "unknown"))
+                .mean()
+                .alias(VEHICLE_MEAN_AGE_COLUMN_NAME)]
+        
+
         for vehicle_make_col_name in vehicle_make_col_names:
 
             n_count_col_name = COL_TEMPLATE_FORMAT.format(
@@ -508,6 +523,7 @@ class DataProcessor():
                         .over(pl.col(USER_ID_COL))
                         .alias(cum_count_col_name)]
 
+        
         # Total across makes is the denominator for the per-make shares
         post_agg_2 += [
             pl.sum_horizontal([pl.col(c) for c in cum_count_col_names])
@@ -867,8 +883,8 @@ class DataProcessor():
                 .group_by(group_and_sort_by_columns)\
                 .agg(agg)\
                 .sort(group_and_sort_by_columns)\
-                .with_columns(post_agg_1)\
-                .with_columns(post_agg_2)\
+                # .with_columns(post_agg_1)\
+                # .with_columns(post_agg_2)\
                 # .with_columns(post_agg_3)\
                 # .select(column_names_to_keep)
                 # .with_columns(post_agg_4)\
@@ -892,6 +908,6 @@ dp = DataProcessor(df_vh)
 
 # dp._generate_activity_feature_aggregation()
 d: pl.DataFrame = dp.apply_feature_engineering(df_vh)
-
+print(d)
 # print(d.select([USER_ID_COL, INTERVAL_START_COL, "n_vehicle_make_bmw_group_0_14_days"]).sort([USER_ID_COL, INTERVAL_START_COL]))
 # print(d.select([USER_ID_COL, INTERVAL_START_COL, "cummulative_count_vehicle_make_bmw_group"]).sort([USER_ID_COL, INTERVAL_START_COL]))
