@@ -23,8 +23,10 @@ LOOKBACK_PERIODS = (1,2,3)
 INTERVAL_IN_DAYS: int = 14
 SUM_TO_LIMIT_IN_DAYS = 56
 N_NEIGHBOURS = 5
-VEHICLE_AGE_NAME = "vehicle_age"
+VEHICLE_AGE_COLUMN_NAME = "vehicle_age"
+FIRST_DISTINCT_COLUMN_NAME = "first_distinct"
 COL_TEMPLATE_FORMAT = "n_{a}_{start}_{end}_days"
+
 
 
 class DataProcessor():
@@ -215,7 +217,7 @@ class DataProcessor():
         )
 
         # Creating an age column of a vehicle later needed when computing mean age of fleet per user per history
-        df = df.with_columns((pl.col(VEHICLE_END_YEAR_COL) - pl.col(VEHICLE_START_YEAR_COL)).alias(VEHICLE_AGE_NAME))
+        df = df.with_columns((pl.col(VEHICLE_END_YEAR_COL) - pl.col(VEHICLE_START_YEAR_COL)).alias(VEHICLE_AGE_COLUMN_NAME))
     
         # One-hot encoding make so each group becomes a 0/1 column that can be summed per interval
         df = df.to_dummies(VEHICLE_MAKE_COL)
@@ -499,7 +501,7 @@ class DataProcessor():
             cum_count_col_names += [cum_count_col_name]
 
             agg += [(pl.col(vehicle_make_col_name) == 1).sum().alias(n_count_col_name)]
-            agg += [(pl.col(VEHICLE_AGE_NAME)).filter(pl.col(VEHICLE_ID_COL).first())]
+           
             # Accumulating per user so the count reflects the whole garage seen up to each interval
             post_agg_1 += [pl.col(n_count_col_name)
                         .cum_sum()
@@ -807,8 +809,21 @@ class DataProcessor():
                                                          churn_adjusted_date_col_name,
                                                          interval_in_days,
                                                          vehicle_make_column_names)
+            
+            # Calculating mean age in an 
+            df_with_intervals = df_with_intervals.with_columns(
+                pl.col(VEHICLE_AGE_COLUMN_NAME)
+                .is_first_distinct()
 
-            print(df)
+                # Not over CHURND_ADJUSTED_DATE, because usage is on ACTIVITY_DATE_COL
+                # Churn date is only used to generate intervals properly for the counting 
+                # process in survival analysis
+                .over([USER_ID_COL,ACTIVITY_DATE_COL])
+                .alias(FIRST_DISTINCT_COLUMN_NAME)
+            )
+
+            print(df_with_intervals)
+            print(df_with_intervals.columns)
 
             agg: list = []
             post_agg_1: list = []
@@ -847,14 +862,14 @@ class DataProcessor():
             post_agg_3 += post_agg_3_vehicle
             post_agg_4 += post_agg_4_app
 
-            # Sorting after agg: group_by does not preserve order, but shift() and cum_sum().over() in post_agg_1 require chronological rows per user
+            # Sorting after agg: group_by does not preserve order, but post aggregation require chronological rows per user
             d = df_with_intervals\
                 .group_by(group_and_sort_by_columns)\
                 .agg(agg)\
                 .sort(group_and_sort_by_columns)\
                 .with_columns(post_agg_1)\
                 .with_columns(post_agg_2)\
-                .with_columns(post_agg_3)\
+                # .with_columns(post_agg_3)\
                 # .select(column_names_to_keep)
                 # .with_columns(post_agg_4)\
                 # .select(column_names_to_keep)
