@@ -17,17 +17,60 @@ from .constants.columns import (
 )
 
 
-
-
-LOOKBACK_PERIODS = (1,2,3)
+# ============================================================
+#  Pipeline configuration (tunable numeric parameters)
+# ============================================================
+LOOKBACK_PERIODS: tuple[int, ...] = (1, 2, 3)
 INTERVAL_IN_DAYS: int = 14
-SUM_TO_LIMIT_IN_DAYS = 56
-N_NEIGHBOURS = 5
-VEHICLE_AGE_COLUMN_NAME = "vehicle_age"
-VEHICLE_MEAN_AGE_COLUMN_NAME = "vehicle_mean_age_in_an_interval"
-VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME = "vehicle_mean_age_overall"
-FIRST_DISTINCT_COLUMN_NAME = "first_distinct"
-COL_TEMPLATE_FORMAT = "n_{a}_{start}_{end}_days"
+SUM_TO_LIMIT_IN_DAYS: int = 56
+FIRST_PERIOD_IN_DAYS: int = 28
+SECOND_PERIOD_IN_DAYS: int = 56
+N_NEIGHBOURS: int = 5
+
+# ============================================================
+#  Sentinel values filling empty-interval / missing rows
+# ============================================================
+UNKNOWN_VALUE: str = "unknown"
+NONE_ACTIVITY_VALUE: str = "none"
+
+# ============================================================
+#  Generated-column name templates (single source of truth).
+#  {a} / {name} = token, {start}/{end}/{r0,r1,r2} = day boundaries.
+# ============================================================
+COL_TEMPLATE_FORMAT: str = "n_{a}_{start}_{end}_days"                                  # counts, lags, windowed sums
+PROP_COL_TEMPLATE: str = "prop_{a}_{start}_{end}"                                      # windowed proportions
+TOTAL_ACTIONS_COL_TEMPLATE: str = "total_actions_{start}_{end}"                        # activity-window denominator
+OVERALL_PROP_COL_TEMPLATE: str = "overall_prop_{name}"                                 # cumulative make share
+CUMULATIVE_COUNT_COL_TEMPLATE: str = "cumulative_count_{name}"                         # running make count
+DRIFT_COL_TEMPLATE: str = "prop_{a}_drift_{r0}_{r1}_vs_{r1}_{r2}"                      # app migration drift
+INTENSITY_DRIFT_COL_TEMPLATE: str = "{a}_intensity_drift_{r0}_{r1}_vs_{r1}_{r2}_days"  # session / action drift
+
+# ============================================================
+#  Aggregation tokens (the {a}/{name} filled into the templates)
+# ============================================================
+SESSIONS_TOKEN: str = "sessions"
+ACTIONS_TOKEN: str = "actions"
+STILL_IN_PRODUCTION_TOKEN: str = "still_in_production"
+TOTAL_CARS_TOKEN: str = "total_cars"
+TOTAL_APP_TOKEN: str = "total_app"
+
+# ============================================================
+#  Fixed (non-templated) generated column names
+# ============================================================
+FIRST_YEAR_COL: str = "first_year"
+START_DATE_COL: str = "start_date"
+END_DATE_COL: str = "end_date"
+LAST_ACTIVITY_DATE_COL: str = "last_activity_date"
+RECENCY_COL: str = "recency"
+INTERVAL_END_COL: str = "interval_end"
+PROP_IN_PROD_COL: str = "prop_in_prod"
+CUMULATIVE_COUNT_TOTAL_COL: str = "cumulative_count_total"
+MEAN_AGE_INTERMEDIATE_COL: str = "vehicle_mean_age_intermediate"   # dropped before output, only feeds the forward-fill
+
+VEHICLE_AGE_COLUMN_NAME: str = "vehicle_age"
+VEHICLE_MEAN_AGE_COLUMN_NAME: str = "vehicle_mean_age_in_an_interval"
+VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME: str = "vehicle_mean_age_overall"
+FIRST_DISTINCT_COLUMN_NAME: str = "first_distinct"
 
 
 
@@ -36,7 +79,11 @@ class DataProcessor():
     def __init__(self, df: pd.DataFrame | pl.DataFrame) -> None:
         self.df = df.copy(deep=True) if type(df) == pd.DataFrame else df
 
-    def KNN_impute_vehicle_start_year(self, df: pl.DataFrame, n_neighbours: int = N_NEIGHBOURS) -> pl.DataFrame:
+    
+    def KNN_impute_vehicle_start_year(self, 
+                                      df: pl.DataFrame, 
+                                      n_neighbours: int = N_NEIGHBOURS) -> pl.DataFrame:
+        
         """
         Imputes missing vehicle_start_year from vehicle make and mileage using KNN.
 
@@ -121,7 +168,7 @@ class DataProcessor():
         Returns:
             (train_data, val_data, test_data) if val_size is set, else (train_data, test_data).
         """
-        first_year_col: str = "first_year"
+        first_year_col: str = FIRST_YEAR_COL
 
         # Binning rare first-activity years so stratification has enough members per class
         user_years = (df
@@ -220,13 +267,13 @@ class DataProcessor():
 
         # Creating an age column of a vehicle later needed when computing mean age of fleet per user per history
         df = df.with_columns((pl.col(VEHICLE_END_YEAR_COL) - pl.col(VEHICLE_START_YEAR_COL)).alias(VEHICLE_AGE_COLUMN_NAME))
-        
+
         # Setting aside vehicle make column to concatenate it later (needed for mean age feature aggregation computations)
         df_make_col = df.select(pl.col(VEHICLE_MAKE_COL))
 
         # One-hot encoding make so each group becomes a 0/1 column that can be summed per interval
         df = df.to_dummies(VEHICLE_MAKE_COL)
-        df = pl.concat([df, df_make_col],how="horizontal")
+        df = pl.concat([df, df_make_col], how="horizontal")
 
         vehicle_make_column_names = [c for c in df.columns if (c.lower().strip()).startswith(f"{VEHICLE_MAKE_COL}_")]
 
@@ -250,14 +297,14 @@ class DataProcessor():
         churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
 
         user_min_max_dates = df.group_by(USER_ID_COL).agg(
-            pl.col(churn_adjusted_date_col_name).min().alias("start_date"),
-            pl.col(churn_adjusted_date_col_name).max().alias("end_date")
+            pl.col(churn_adjusted_date_col_name).min().alias(START_DATE_COL),
+            pl.col(churn_adjusted_date_col_name).max().alias(END_DATE_COL)
         )
 
         intervals = user_min_max_dates.with_columns(
             pl.date_ranges(
-                start=pl.col("start_date"),
-                end=pl.col("end_date"),
+                start=pl.col(START_DATE_COL),
+                end=pl.col(END_DATE_COL),
                 interval=timedelta(days=interval)
             ).alias(INTERVAL_START_COL)
         ).explode(INTERVAL_START_COL).select([USER_ID_COL, INTERVAL_START_COL])
@@ -290,21 +337,21 @@ class DataProcessor():
         Fills nulls left by the empty intervals introduced in the interval grid.
 
         Empty intervals carry no activity, so their fills encode "no activity"
-        explicitly: counts and flags go to a zero/False/"none" sentinel rather than
+        explicitly: counts and flags go to a zero/False/sentinel value rather than
         being left null, so later sums and comparisons treat them as inactivity.
         """
 
         col_fill_list = [
             pl.col(CHURN_TRIGGERED_COL).fill_null(False),
-            pl.col(VEHICLE_ID_COL).fill_null("unknown"),
-            pl.col(VEHICLE_MODEL_COL).fill_null("unknown"),
-            pl.col(VEHICLE_MAKE_COL).fill_null("unknown"),
+            pl.col(VEHICLE_ID_COL).fill_null(UNKNOWN_VALUE),
+            pl.col(VEHICLE_MODEL_COL).fill_null(UNKNOWN_VALUE),
+            pl.col(VEHICLE_MAKE_COL).fill_null(UNKNOWN_VALUE),
             pl.col(VEHICLE_START_YEAR_COL).fill_null(0),
             pl.col(VEHICLE_END_YEAR_COL).fill_null(0),
-            pl.col(VEHICLE_MILEAGE_COL).fill_null("unknown"),
+            pl.col(VEHICLE_MILEAGE_COL).fill_null(UNKNOWN_VALUE),
             pl.col(ACTIVITY_DATE_COL).fill_null(pl.lit(None).cast(pl.Date)),
-            pl.col(APP_COL).fill_null("unknown"),
-            pl.col(ACTIVITY_TYPE_COL).fill_null("none"),
+            pl.col(APP_COL).fill_null(UNKNOWN_VALUE),
+            pl.col(ACTIVITY_TYPE_COL).fill_null(NONE_ACTIVITY_VALUE),
             pl.col(STILL_IN_PRODUCTION_COL).fill_null(False),
             pl.col(CHURN_ADJUSTED_DATE_COL).fill_null(pl.lit(None).cast(pl.Date))]
 
@@ -443,7 +490,7 @@ class DataProcessor():
             col_registry, end_at_days=sum_to_limit_in_days)
 
         # Total over the window is the proportion denominator shared by every activity type
-        total_actions_col_name = f"total_actions_{0}_{sum_to_limit_in_days}"
+        total_actions_col_name = TOTAL_ACTIONS_COL_TEMPLATE.format(start=0, end=sum_to_limit_in_days)
         post_agg_2 += [
             pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_activity_count])
             .alias(total_actions_col_name)
@@ -460,7 +507,7 @@ class DataProcessor():
                 .alias(column_name)
             ]
 
-            prop_column_name = f"prop_{activity_type}_{0}_{sum_to_limit_in_days}"
+            prop_column_name = PROP_COL_TEMPLATE.format(a=activity_type, start=0, end=sum_to_limit_in_days)
             # fill_nan(0): an inactive window gives 0/0, which reads as zero share of that activity
             post_agg_3 += [
                 (pl.col(column_name) / pl.col(total_actions_col_name)).alias(prop_column_name).fill_nan(0),
@@ -491,27 +538,24 @@ class DataProcessor():
         post_agg_2 = []
         post_agg_3 = []
         column_names_to_keep: list = []
-        cum_count_col_name_template = "cumulative_count_{vehicle_make_col_name}"
         cum_count_col_names: list = []
-        total_cum_count_col = "cumulative_count_total"
 
         ##___MEAN AGE___##
         agg += [(pl.col(VEHICLE_AGE_COLUMN_NAME))
                 .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True )
                         &
-                        (pl.col(VEHICLE_MAKE_COL) != "unknown"))
+                        (pl.col(VEHICLE_MAKE_COL) != UNKNOWN_VALUE))
                 .mean()
                 .alias(VEHICLE_MEAN_AGE_COLUMN_NAME)]
-        
-        dummy_name = "dummy"
+
         post_agg_1 += [(pl.col(VEHICLE_MEAN_AGE_COLUMN_NAME)
                         .cum_sum()
                         .truediv(pl.col(VEHICLE_MEAN_AGE_COLUMN_NAME).cum_count()))
-                        .alias(dummy_name) ] # Can't forward fill inplace -> assigning dummy column
-        
-        # Null values for intervals with no activity -> forward fill to carry information from 
+                        .alias(MEAN_AGE_INTERMEDIATE_COL)]  # Can't forward fill inplace -> assigning an intermediate column
+
+        # Null values for intervals with no activity -> forward fill to carry information from
         # previous periods
-        post_agg_2 += [pl.col(dummy_name)
+        post_agg_2 += [pl.col(MEAN_AGE_INTERMEDIATE_COL)
                        .forward_fill()
                        .alias(VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME)
                        .over(USER_ID_COL)]
@@ -520,35 +564,34 @@ class DataProcessor():
 
         ##__STILL IN PRODUCTION PROPORTIONS___##
 
-        still_in_prod_count = COL_TEMPLATE_FORMAT.format(a="still_in_production",
+        still_in_prod_count = COL_TEMPLATE_FORMAT.format(a=STILL_IN_PRODUCTION_TOKEN,
                                                   start=0,
                                                   end=interval_in_days)
-        total_car_count = COL_TEMPLATE_FORMAT.format(a="total_cars",
+        total_car_count = COL_TEMPLATE_FORMAT.format(a=TOTAL_CARS_TOKEN,
                                                   start=0,
                                                   end=interval_in_days)
-        
+
         agg += [pl.col(STILL_IN_PRODUCTION_COL)
                 .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True)
                         &
-                        (pl.col(VEHICLE_MAKE_COL) != "unknown"))
+                        (pl.col(VEHICLE_MAKE_COL) != UNKNOWN_VALUE))
                 .sum()
                 .alias(still_in_prod_count),
-                
+
                 pl.col(STILL_IN_PRODUCTION_COL)
                 .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True)
                         &
-                        (pl.col(VEHICLE_MAKE_COL) != "unknown"))
+                        (pl.col(VEHICLE_MAKE_COL) != UNKNOWN_VALUE))
                 .count()
                 .alias(total_car_count)]
-        
-        prop_in_prod = "prop_in_prod"
+
         post_agg_1 += [(pl.col(still_in_prod_count).cum_sum().over(USER_ID_COL) /
                         pl.col(total_car_count).cum_sum().over(USER_ID_COL))
                         .fill_nan(0)
-                        .alias(prop_in_prod)]
-        
+                        .alias(PROP_IN_PROD_COL)]
 
-        column_names_to_keep += [prop_in_prod]
+
+        column_names_to_keep += [PROP_IN_PROD_COL]
 
 
         ##___MAKE PROPORTIONS___##
@@ -559,8 +602,8 @@ class DataProcessor():
                                                 start=0,
                                                 end=interval_in_days)
 
-            cum_count_col_name = cum_count_col_name_template.format(
-                vehicle_make_col_name=vehicle_make_col_name)
+            cum_count_col_name = CUMULATIVE_COUNT_COL_TEMPLATE.format(
+                name=vehicle_make_col_name)
 
             cum_count_col_names += [cum_count_col_name]
 
@@ -576,19 +619,18 @@ class DataProcessor():
         # Total across makes is the denominator for the per-make shares
         post_agg_2 += [
             pl.sum_horizontal([pl.col(c) for c in cum_count_col_names])
-            .alias(total_cum_count_col)
+            .alias(CUMULATIVE_COUNT_TOTAL_COL)
         ]
 
-        prop_col_name_template = "overall_prop_{vehicle_make_col_name}"
         post_agg_3 += [
-            (pl.col(col) / pl.col(total_cum_count_col))
+            (pl.col(col) / pl.col(CUMULATIVE_COUNT_TOTAL_COL))
             .fill_nan(0)
-            .alias(prop_col_name_template.format(vehicle_make_col_name=col.replace("cumulative_count_", "")))
+            .alias(OVERALL_PROP_COL_TEMPLATE.format(name=col.replace("cumulative_count_", "")))
             for col in cum_count_col_names
         ]
 
         column_names_to_keep += [
-            prop_col_name_template.format(vehicle_make_col_name=col.replace("cumulative_count_", ""))
+            OVERALL_PROP_COL_TEMPLATE.format(name=col.replace("cumulative_count_", ""))
             for col in cum_count_col_names
         ]
 
@@ -598,8 +640,8 @@ class DataProcessor():
                                              lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                              interval_in_days: int = INTERVAL_IN_DAYS,
                                              sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
-                                             first_period: int = 28,
-                                             second_period: int = 56) -> tuple[list, ...]:
+                                             first_period: int = FIRST_PERIOD_IN_DAYS,
+                                             second_period: int = SECOND_PERIOD_IN_DAYS) -> tuple[list, ...]:
         """
         Builds app-usage composition and migration features.
 
@@ -640,10 +682,9 @@ class DataProcessor():
         columns_to_sum_second_window_app = self._columns_within_window(
             col_registry, start_from_days=first_period, end_at_days=second_period)
 
-        total_app_name = "total_app"
-        total_app_col_name_0_56  = COL_TEMPLATE_FORMAT.format(a=total_app_name, start=0,            end=sum_to_limit_in_days)
-        total_app_0_28_col_name  = COL_TEMPLATE_FORMAT.format(a=total_app_name, start=0,            end=first_period)
-        total_app_28_56_col_name = COL_TEMPLATE_FORMAT.format(a=total_app_name, start=first_period, end=second_period)
+        total_app_col_name_0_56  = COL_TEMPLATE_FORMAT.format(a=TOTAL_APP_TOKEN, start=0,            end=sum_to_limit_in_days)
+        total_app_0_28_col_name  = COL_TEMPLATE_FORMAT.format(a=TOTAL_APP_TOKEN, start=0,            end=first_period)
+        total_app_28_56_col_name = COL_TEMPLATE_FORMAT.format(a=TOTAL_APP_TOKEN, start=first_period, end=second_period)
 
         post_agg_2 += [
             pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_app_count]).alias(total_app_col_name_0_56),
@@ -670,7 +711,7 @@ class DataProcessor():
                 col_registry, end_at_days=sum_to_limit_in_days, token_filter=app)
 
             column_name_0_56 = COL_TEMPLATE_FORMAT.format(a=app, start=0, end=sum_to_limit_in_days)
-            prop_column_name_0_56 = f"prop_{app}_{0}_{sum_to_limit_in_days}"
+            prop_column_name_0_56 = PROP_COL_TEMPLATE.format(a=app, start=0, end=sum_to_limit_in_days)
 
             post_agg_2 += [
                 pl.sum_horizontal([pl.col(c) for c in columns]).alias(column_name_0_56)
@@ -682,10 +723,10 @@ class DataProcessor():
                 .alias(prop_column_name_0_56).fill_nan(0)
             ]
 
-        prop_main_0_28_col  = f"prop_{main_token}_{0}_{first_period}"
-        prop_main_28_56_col = f"prop_{main_token}_{first_period}_{second_period}"
-        prop_main_0_56_col  = f"prop_{main_token}_{0}_{second_period}"
-        main_drift_col      = f"prop_{main_token}_drift_{0}_{first_period}_vs_{first_period}_{second_period}"
+        prop_main_0_28_col  = PROP_COL_TEMPLATE.format(a=main_token, start=0,            end=first_period)
+        prop_main_28_56_col = PROP_COL_TEMPLATE.format(a=main_token, start=first_period, end=second_period)
+        prop_main_0_56_col  = PROP_COL_TEMPLATE.format(a=main_token, start=0,            end=second_period)
+        main_drift_col      = DRIFT_COL_TEMPLATE.format(a=main_token, r0=0, r1=first_period, r2=second_period)
 
         post_agg_3 += [
             (pl.col(main_0_28_col)  / pl.col(total_app_0_28_col_name)).alias(prop_main_0_28_col).fill_nan(0),
@@ -700,12 +741,12 @@ class DataProcessor():
         column_names_to_keep += [prop_main_0_56_col, main_drift_col]
 
         return agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, column_names_to_keep
-
+    
     def _generate_behaviour_features_aggregation(self,
                                     lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                     interval_in_days: int = INTERVAL_IN_DAYS,
-                                    first_period: int = 28,
-                                    second_period: int = 56) -> tuple[list, ...]:
+                                    first_period: int = FIRST_PERIOD_IN_DAYS,
+                                    second_period: int = SECOND_PERIOD_IN_DAYS) -> tuple[list, ...]:
         """
         Builds volume, recency, and engagement-trend features.
 
@@ -724,20 +765,14 @@ class DataProcessor():
         column_names_to_keep: list = []
 
 
-        last_activity_date_col = "last_activity_date"
-        days_since_last_activity_col = "recency"
-        interval_end_col = "interval_end"
-        sessions_name = "sessions"
-        actions_name = "actions"
-
-        session_base_col = COL_TEMPLATE_FORMAT.format(a=sessions_name, start=0, end=interval_in_days)
-        action_base_col = COL_TEMPLATE_FORMAT.format(a=actions_name, start=0, end=interval_in_days)
+        session_base_col = COL_TEMPLATE_FORMAT.format(a=SESSIONS_TOKEN, start=0, end=interval_in_days)
+        action_base_col = COL_TEMPLATE_FORMAT.format(a=ACTIONS_TOKEN, start=0, end=interval_in_days)
 
         agg = [
             pl.col(ACTIVITY_DATE_COL).filter(pl.col(ACTIVITY_DATE_COL)
             .is_not_null())
             .max()
-            .alias(last_activity_date_col),
+            .alias(LAST_ACTIVITY_DATE_COL),
 
             # Counting unique days, not rows, so multiple actions on one day count as a single session
             pl.col(ACTIVITY_DATE_COL).filter(pl.col(ACTIVITY_DATE_COL)
@@ -745,7 +780,7 @@ class DataProcessor():
             .n_unique()
             .alias(session_base_col),
 
-            pl.col(ACTIVITY_TYPE_COL).filter(pl.col(ACTIVITY_TYPE_COL) != "none")
+            pl.col(ACTIVITY_TYPE_COL).filter(pl.col(ACTIVITY_TYPE_COL) != NONE_ACTIVITY_VALUE)
             .count()
             .alias(action_base_col)
 
@@ -753,16 +788,16 @@ class DataProcessor():
 
         post_agg_1 = [
             # Carrying the last activity date forward so empty intervals keep the most recent real date for recency
-            pl.col(last_activity_date_col).forward_fill().over(USER_ID_COL),
+            pl.col(LAST_ACTIVITY_DATE_COL).forward_fill().over(USER_ID_COL),
             # Interval end is the recency reference point: how stale the user is by the close of the interval
-            (pl.col(INTERVAL_START_COL) + timedelta(days=interval_in_days)).alias(interval_end_col)]
+            (pl.col(INTERVAL_START_COL) + timedelta(days=interval_in_days)).alias(INTERVAL_END_COL)]
 
         session_lags, session_registry = self._build_lagged_columns(
-            {sessions_name: session_base_col}, lookback_periods, interval_in_days, fill_value=0)
+            {SESSIONS_TOKEN: session_base_col}, lookback_periods, interval_in_days, fill_value=0)
         post_agg_1 += session_lags
 
         action_lags, action_registry = self._build_lagged_columns(
-            {actions_name: action_base_col}, lookback_periods, interval_in_days, fill_value=0)
+            {ACTIONS_TOKEN: action_base_col}, lookback_periods, interval_in_days, fill_value=0)
         post_agg_1 += action_lags
 
 
@@ -777,11 +812,11 @@ class DataProcessor():
             start_from_days=first_period,
             end_at_days=second_period)
 
-        recent_window_session_col = COL_TEMPLATE_FORMAT.format(a=sessions_name,
+        recent_window_session_col = COL_TEMPLATE_FORMAT.format(a=SESSIONS_TOKEN,
                                                                start=0,
                                                                end=first_period)
 
-        prior_window_session_col = COL_TEMPLATE_FORMAT.format(a=sessions_name,
+        prior_window_session_col = COL_TEMPLATE_FORMAT.format(a=SESSIONS_TOKEN,
                                                               start=first_period,
                                                               end=second_period)
 
@@ -791,7 +826,7 @@ class DataProcessor():
                     .alias(prior_window_session_col)]
 
         # Casting to signed Int32: session counts are u32, so a falling drift would underflow to a large positive number
-        session_intensity_drift_col = "sessions_intensity_drift_0_28_vs_28_56_days"
+        session_intensity_drift_col = INTENSITY_DRIFT_COL_TEMPLATE.format(a=SESSIONS_TOKEN, r0=0, r1=first_period, r2=second_period)
         post_agg_3 += [(pl.col(recent_window_session_col).cast(pl.Int32) - pl.col(prior_window_session_col).cast(pl.Int32)).alias(session_intensity_drift_col)]
 
 
@@ -806,11 +841,11 @@ class DataProcessor():
             start_from_days=first_period,
             end_at_days=second_period)
 
-        recent_window_action_col = COL_TEMPLATE_FORMAT.format(a=actions_name,
+        recent_window_action_col = COL_TEMPLATE_FORMAT.format(a=ACTIONS_TOKEN,
                                                              start=0,
                                                              end=first_period)
 
-        prior_window_action_col = COL_TEMPLATE_FORMAT.format(a=actions_name,
+        prior_window_action_col = COL_TEMPLATE_FORMAT.format(a=ACTIONS_TOKEN,
                                                             start=first_period,
                                                             end=second_period)
 
@@ -820,11 +855,11 @@ class DataProcessor():
                     .alias(prior_window_action_col)]
 
         # Casting to signed Int32 for the same underflow reason as the session drift
-        action_intensity_drift_col = "actions_intensity_drift_0_28_vs_28_56_days"
+        action_intensity_drift_col = INTENSITY_DRIFT_COL_TEMPLATE.format(a=ACTIONS_TOKEN, r0=0, r1=first_period, r2=second_period)
         post_agg_3 += [(pl.col(recent_window_action_col).cast(pl.Int32) - pl.col(prior_window_action_col).cast(pl.Int32)).alias(action_intensity_drift_col)]
 
 
-        post_agg_2 += [(pl.col(interval_end_col) - pl.col(last_activity_date_col)).alias(days_since_last_activity_col)]
+        post_agg_2 += [(pl.col(INTERVAL_END_COL) - pl.col(LAST_ACTIVITY_DATE_COL)).alias(RECENCY_COL)]
 
 
         column_names_to_keep += [
@@ -832,8 +867,8 @@ class DataProcessor():
             session_intensity_drift_col,
             recent_window_action_col,
             action_intensity_drift_col,
-            days_since_last_activity_col,
-            interval_end_col]
+            RECENCY_COL,
+            INTERVAL_END_COL]
 
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
@@ -844,8 +879,8 @@ class DataProcessor():
                                    interval_in_days: int = INTERVAL_IN_DAYS,
                                    lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                    sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
-                                   first_period: int = 28,
-                                   second_period: int = 56) -> pl.DataFrame | None:
+                                   first_period: int = FIRST_PERIOD_IN_DAYS,
+                                   second_period: int = SECOND_PERIOD_IN_DAYS) -> pl.DataFrame | None:
         """
         Runs the full feature-engineering pipeline and returns the per-interval frame.
 
@@ -864,23 +899,19 @@ class DataProcessor():
                                                          churn_adjusted_date_col_name,
                                                          interval_in_days,
                                                          vehicle_make_column_names)
-            
-            # Calculating mean age in an 
+
+            # Flagging the first occurrence of each distinct vehicle per user-day so the
+            # mean-age / still-in-production aggregations count each vehicle once.
             df_with_intervals = df_with_intervals.with_columns(
                 pl.col(VEHICLE_AGE_COLUMN_NAME)
                 .is_first_distinct()
 
                 # Not over CHURND_ADJUSTED_DATE, because usage is on ACTIVITY_DATE_COL
-                # Churn date is only used to generate intervals properly for the counting 
+                # Churn date is only used to generate intervals properly for the counting
                 # process in survival analysis
-                .over([USER_ID_COL,ACTIVITY_DATE_COL])
+                .over([USER_ID_COL, ACTIVITY_DATE_COL])
                 .alias(FIRST_DISTINCT_COLUMN_NAME)
             )
-
-            print(df_with_intervals[FIRST_DISTINCT_COLUMN_NAME].mean())
-            print(df_with_intervals)
-            print(df_with_intervals.filter(pl.col(FIRST_DISTINCT_COLUMN_NAME))[STILL_IN_PRODUCTION_COL].mean())
-            print(df_with_intervals.columns)
 
             agg: list = []
             post_agg_1: list = []
@@ -888,7 +919,6 @@ class DataProcessor():
             post_agg_3: list = []
             post_agg_4: list = []
             column_names_to_keep: list = []
-            column_names_to_keep += [USER_ID_COL]
 
             agg_af, post_agg_1_af, post_agg_2_af, post_agg_3_af, column_names_to_keep_af = \
                 self._generate_activity_feature_aggregation(
@@ -913,23 +943,33 @@ class DataProcessor():
                     interval_in_days)
 
 
-            agg +=  agg_vehicle
-            column_names_to_keep += column_names_to_keep_vehicle
-            post_agg_1 += post_agg_1_vehicle
-            post_agg_2 += post_agg_2_vehicle
-            post_agg_3 += post_agg_3_vehicle
+            agg += agg_af + agg_app + agg_b + agg_vehicle
+
+            column_names_to_keep += [USER_ID_COL]
+            column_names_to_keep += (
+                column_names_to_keep_af +
+                column_names_to_keep_app +
+                column_names_to_keep_b +
+                column_names_to_keep_vehicle
+            )
+
+
+            post_agg_1 += post_agg_1_af + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle
+            post_agg_2 += post_agg_2_af + post_agg_2_app + post_agg_2_b + post_agg_2_vehicle
+            post_agg_3 += post_agg_3_af + post_agg_3_app + post_agg_3_b + post_agg_3_vehicle
             post_agg_4 += post_agg_4_app
 
             # Sorting after agg: group_by does not preserve order, but post aggregation require chronological rows per user
-            d = df_with_intervals\
-                .group_by(group_and_sort_by_columns)\
-                .agg(agg)\
-                .sort(group_and_sort_by_columns)\
-                .with_columns(post_agg_1)\
-                .with_columns(post_agg_2)\
-                .with_columns(post_agg_3)\
+            d = (df_with_intervals
+                .group_by(group_and_sort_by_columns)
+                .agg(agg)
+                .sort(group_and_sort_by_columns)
+                .with_columns(post_agg_1)
+                .with_columns(post_agg_2)
+                .with_columns(post_agg_3)
+                .with_columns(post_agg_4)
                 .select(column_names_to_keep)
-                # .with_columns(post_agg_4)\
+            )
 
             print(d)
             return d
@@ -951,6 +991,5 @@ dp = DataProcessor(df_vh)
 # dp._generate_activity_feature_aggregation()
 d: pl.DataFrame = dp.apply_feature_engineering(df_vh)
 
-print(d.select("prop_in_prod").describe())
 # print(d.select([USER_ID_COL, INTERVAL_START_COL, "n_vehicle_make_bmw_group_0_14_days"]).sort([USER_ID_COL, INTERVAL_START_COL]))
 # print(d.select([USER_ID_COL, INTERVAL_START_COL, "cummulative_count_vehicle_make_bmw_group"]).sort([USER_ID_COL, INTERVAL_START_COL]))
