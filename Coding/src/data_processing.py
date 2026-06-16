@@ -495,7 +495,7 @@ class DataProcessor():
         cum_count_col_names: list = []
         total_cum_count_col = "cumulative_count_total"
 
-    
+        ##___MEAN AGE___##
         agg += [(pl.col(VEHICLE_AGE_COLUMN_NAME))
                 .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True )
                         &
@@ -518,6 +518,40 @@ class DataProcessor():
 
         column_names_to_keep += [VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME]
 
+        ##__STILL IN PRODUCTION PROPORTIONS___##
+
+        still_in_prod_count = COL_TEMPLATE_FORMAT.format(a="still_in_production",
+                                                  start=0,
+                                                  end=interval_in_days)
+        total_car_count = COL_TEMPLATE_FORMAT.format(a="total_cars",
+                                                  start=0,
+                                                  end=interval_in_days)
+        
+        agg += [pl.col(STILL_IN_PRODUCTION_COL)
+                .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True)
+                        &
+                        (pl.col(VEHICLE_MAKE_COL) != "unknown"))
+                .sum()
+                .alias(still_in_prod_count),
+                
+                pl.col(STILL_IN_PRODUCTION_COL)
+                .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True)
+                        &
+                        (pl.col(VEHICLE_MAKE_COL) != "unknown"))
+                .count()
+                .alias(total_car_count)]
+        
+        prop_in_prod = "prop_in_prod"
+        post_agg_1 += [(pl.col(still_in_prod_count).cum_sum().over(USER_ID_COL) /
+                        pl.col(total_car_count).cum_sum().over(USER_ID_COL))
+                        .fill_nan(0)
+                        .alias(prop_in_prod)]
+        
+
+        column_names_to_keep += [prop_in_prod]
+
+
+        ##___MAKE PROPORTIONS___##
         for vehicle_make_col_name in vehicle_make_col_names:
 
             n_count_col_name = COL_TEMPLATE_FORMAT.format(
@@ -843,7 +877,9 @@ class DataProcessor():
                 .alias(FIRST_DISTINCT_COLUMN_NAME)
             )
 
+            print(df_with_intervals[FIRST_DISTINCT_COLUMN_NAME].mean())
             print(df_with_intervals)
+            print(df_with_intervals.filter(pl.col(FIRST_DISTINCT_COLUMN_NAME))[STILL_IN_PRODUCTION_COL].mean())
             print(df_with_intervals.columns)
 
             agg: list = []
@@ -915,5 +951,6 @@ dp = DataProcessor(df_vh)
 # dp._generate_activity_feature_aggregation()
 d: pl.DataFrame = dp.apply_feature_engineering(df_vh)
 
+print(d.select("prop_in_prod").describe())
 # print(d.select([USER_ID_COL, INTERVAL_START_COL, "n_vehicle_make_bmw_group_0_14_days"]).sort([USER_ID_COL, INTERVAL_START_COL]))
 # print(d.select([USER_ID_COL, INTERVAL_START_COL, "cummulative_count_vehicle_make_bmw_group"]).sort([USER_ID_COL, INTERVAL_START_COL]))
