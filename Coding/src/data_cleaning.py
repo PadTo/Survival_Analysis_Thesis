@@ -1,9 +1,7 @@
 import datetime
 from dataclasses import dataclass
 from pathlib import Path
-
 import pandas as pd
-
 from .constants import paths_to_files_and_folders
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
@@ -13,22 +11,36 @@ from .constants.columns import (
 )
 
 
-# Internal working columns (created and dropped within methods, not part of the input schema)
+# ============================================================
+#  Internal working columns (created and dropped within methods)
+# ============================================================
 NEXT_DATE_COL: str = "next_date"
 ACTIVITY_GAP_COL: str = "activity_gap"
 
-# Output file handling
+
+# ============================================================
+#  Output file handling
+# ============================================================
 CSV_EXTENSION: str = ".csv"
 DEFAULT_OUTPUT_FILENAME: str = "no_name.csv"
 PERSONAL_USERS_FILENAME: str = "personal_users_dataset.csv"
 PROFESSIONAL_USERS_FILENAME: str = "professional_users_dataset.csv"
 
-# Tuning defaults
+
+# ============================================================
+#  Tuning defaults
+# ============================================================
 DEFAULT_THRESHOLD_DAYS: int = 160
 DEFAULT_HHI_THRESHOLD: int = 6
 DEFAULT_CAR_SHARE_ABS: int = 4
 DEFAULT_CAR_SHARE_FRACTION: float = 0.8
 MIN_ACTIVITY_SPAN_DAYS: int = 1
+
+
+# ============================================================
+#  Sentinel values
+# ============================================================
+FILL_VALUE_CHURN_TRIGGERED: bool = False
 
 
 @dataclass
@@ -53,9 +65,6 @@ class DataCleaner:
                  df_activity: pd.DataFrame,
                  df_vehicle: pd.DataFrame,
                  columns: ColumnConfig | None = None) -> None:
-        """
-        Initializes the cleaner with activity and vehicle dataframes.
-        """
         self.df_activity = df_activity.copy(deep=True)
         self.df_vehicle = df_vehicle.copy(deep=True)
         self.cols = columns or ColumnConfig()
@@ -63,9 +72,6 @@ class DataCleaner:
         self.max_date = pd.to_datetime(df_activity[self.cols.activity_date].max())
 
     def __step_counter(self, step_counter: int = 1) -> int:
-        """
-        Prints a step banner and returns the next step number.
-        """
         print(f"_Step {step_counter}_")
         return step_counter + 1
 
@@ -75,7 +81,8 @@ class DataCleaner:
         Merges vehicle metadata with activity logs and applies basic cleaning.
         """
 
-        # Filtering users with duplicate vehicle ids but different vehicle characteristics
+        # Users with the same vehicle_id appearing under different metadata rows are
+        # ambiguous — keeping them would silently duplicate activity rows on merge
         dupe_users_mask = (
             self.df_vehicle
             .groupby([self.cols.user_id, self.cols.vehicle_id])[self.cols.vehicle_id]
@@ -111,7 +118,8 @@ class DataCleaner:
             print(f"Rows removed: {row_count_before - row_count_after}")
             print()
 
-        # Removing user_ids not present in vehicle dataset
+        # Activity rows with no matching vehicle cannot carry make/model/age metadata
+        # downstream, so they are removed rather than carried as nulls
         print("Removing user_ids that aren't present in vehicle dataset")
         print(f"Rows before user filtering: {len(df)}")
 
@@ -123,7 +131,6 @@ class DataCleaner:
         print(f"Rows after user filtering: {len(df)}")
         print()
 
-        # Removing duplicate rows
         print("Removing duplicate rows")
         print(f"Rows before deduplication: {len(df)}")
 
@@ -139,63 +146,66 @@ class DataCleaner:
                                 threshold_value: int = DEFAULT_THRESHOLD_DAYS
                                 ) -> pd.DataFrame:
         """
-        Identifies and handles user churn based on inactivity gaps.
-        """
+        Labels churn and truncates each user's history at their first churn event.
 
-        future_date_name = NEXT_DATE_COL
-        activity_gap_name = ACTIVITY_GAP_COL
-        churn_triggered_col_name = self.cols.churn_triggered
-        churn_date_col_name = self.cols.churn_adjusted_date
+        Churn is defined as either a gap between consecutive activities exceeding
+        the threshold, or a last activity that is more than threshold days before
+        the dataset max date. Rows after the first trigger are dropped because they
+        would represent activity in a post-churn state that the model should not see.
+        """
 
         df = df.copy(deep=True)
 
         df[self.cols.activity_date] = pd.to_datetime(df[self.cols.activity_date])
         df = df.sort_values([self.cols.user_id, self.cols.activity_date])
 
-        # Next activity date per user
-        df[future_date_name] = (
+        df[NEXT_DATE_COL] = (
             df.groupby(self.cols.user_id)[self.cols.activity_date].shift(-1)
         )
 
-        df[activity_gap_name] = (
-            df[future_date_name] - df[self.cols.activity_date]
+        df[ACTIVITY_GAP_COL] = (
+            df[NEXT_DATE_COL] - df[self.cols.activity_date]
         )
 
         # Condition 1: gap between consecutive activities exceeds threshold
         gap_churn = (
-            df[activity_gap_name] >= pd.Timedelta(days=threshold_value)
-        ) & df[activity_gap_name].notna()
+            df[ACTIVITY_GAP_COL] >= pd.Timedelta(days=threshold_value)
+        ) & df[ACTIVITY_GAP_COL].notna()
 
         # Condition 2: last activity is more than threshold days before max_date
-        is_last_row = df[future_date_name].isna()
+        is_last_row = df[NEXT_DATE_COL].isna()
 
         end_churn = is_last_row & (
             (self.max_date - df[self.cols.activity_date]) >= pd.Timedelta(days=threshold_value)
         )
 
-        df[churn_triggered_col_name] = gap_churn | end_churn
+        df[self.cols.churn_triggered] = gap_churn | end_churn
 
-        # Keep only first churn trigger per user
-        df[churn_triggered_col_name] = (
-            df.groupby(self.cols.user_id)[churn_triggered_col_name].cummax()
+        # cummax propagates the first True forward so all rows after the trigger
+        # are also marked, letting the shift-mask below drop them cleanly
+        df[self.cols.churn_triggered] = (
+            df.groupby(self.cols.user_id)[self.cols.churn_triggered].cummax()
         )
 
+        # shift(1) offsets the cummax flag by one row so the trigger row itself
+        # is kept (it is the churn event) but every row after it is dropped
         row_mask = (
-            df.groupby(self.cols.user_id)[churn_triggered_col_name]
-            .shift(1, fill_value=False)
+            df.groupby(self.cols.user_id)[self.cols.churn_triggered]
+            .shift(1, fill_value=FILL_VALUE_CHURN_TRIGGERED)
         )
 
         df = df[~row_mask]
 
-        df[churn_date_col_name] = df[self.cols.activity_date]
+        df[self.cols.churn_adjusted_date] = df[self.cols.activity_date]
 
-        # Churn date = activity_date + threshold
+        # Churn date is pushed forward by the threshold so the interval grid
+        # covers the full at-risk window, not just the last observed activity
         df.loc[
-            df[churn_triggered_col_name],
-            churn_date_col_name
+            df[self.cols.churn_triggered],
+            self.cols.churn_adjusted_date
         ] += pd.Timedelta(days=threshold_value)
 
-        df.drop(columns=[activity_gap_name, future_date_name], inplace=True)
+        df.drop(columns=[ACTIVITY_GAP_COL, NEXT_DATE_COL], inplace=True)
 
         return df.copy()
 
@@ -213,6 +223,9 @@ class DataCleaner:
                              df: pd.DataFrame) -> pd.DataFrame:
         """
         Removes users whose activity history spans only one day.
+
+        Single-day users have no observable inactivity pattern and cannot
+        contribute meaningful interval-level features to the survival model.
         """
         df = df.copy(deep=True)
         df[self.cols.activity_date] = pd.to_datetime(df[self.cols.activity_date])
@@ -243,7 +256,11 @@ class DataCleaner:
                                         threshold_value: int = DEFAULT_THRESHOLD_DAYS
                                         ) -> pd.DataFrame:
         """
-        Filters users based on observation window length.
+        Removes users whose observation window is shorter than the churn threshold.
+
+        A user first seen less than threshold_value days before max_date cannot
+        have churned by definition, so including them would inflate the censored
+        fraction without contributing any churn signal.
         """
         df[self.cols.activity_date] = pd.to_datetime(df[self.cols.activity_date])
 
@@ -268,12 +285,22 @@ class DataCleaner:
                              return_personal_use_users: bool = True
                              ) -> pd.DataFrame:
         """
-        Splits users into personal or professional groups.
+        Splits users into personal or professional groups via HHI and car-share heuristics.
+
+        The inverse HHI captures vehicle diversity: a low HHI (high diversity)
+        signals a fleet operator. The car-share check catches concentrated usage
+        even when total vehicle count is small, since a mechanic may service many
+        makes but each appears only once.
+
+        The two masks are OR'd so that a user classified as personal by either
+        criterion is kept in the personal group, erring on the side of inclusion.
         """
 
         def car_share_check(x: pd.Series,
                             threshold: int = DEFAULT_CAR_SHARE_ABS,
                             threshold_fraction: float = DEFAULT_CAR_SHARE_FRACTION) -> bool:
+            # Users with fewer vehicles than the threshold cannot be fleet operators
+            # by the absolute criterion, so they pass unconditionally
             if len(x) <= threshold:
                 return True
             return x.cumsum().iloc[threshold - 1] >= threshold_fraction
@@ -334,7 +361,12 @@ class DataCleaner:
                        save_file_to: Path | None = None
                        ) -> pd.DataFrame:
         """
-        Main data cleaning pipeline.
+        Orchestrates the full cleaning pipeline.
+
+        Steps are opt-in via boolean flags so the caller controls exactly which
+        transformations run without subclassing or monkey-patching. Order matters:
+        end-year imputation should precede inactivity filtering so churn_adjusted_date
+        is computed on a complete vehicle age column.
         """
         step = 1
         df = self.df_activity.copy()
@@ -352,6 +384,8 @@ class DataCleaner:
             missing_before = df[self.cols.vehicle_end_year].isna().sum()
 
             df = df.copy()
+            # Null end year means the model is still in production; flagging before
+            # filling so the boolean is derived from the original missingness pattern
             df[self.cols.still_in_production] = df[self.cols.vehicle_end_year].isna()
             df[self.cols.vehicle_end_year] = df[self.cols.vehicle_end_year].fillna(current_year)
 
@@ -375,12 +409,7 @@ class DataCleaner:
             step = self.__step_counter(step)
 
             row_count_before = len(df)
-
-            df = self.filter_users_by_set_cutoff_date(
-                df,
-                threshold_value
-            )
-
+            df = self.filter_users_by_set_cutoff_date(df, threshold_value)
             row_count_after = len(df)
 
             print(f"Rows before set cutoff date filtering: {row_count_before}")
@@ -468,10 +497,11 @@ class DataCleaner:
 
             if filter_by_user_type and return_personal_use_users:
                 file_name = PERSONAL_USERS_FILENAME
-
             elif filter_by_user_type and not return_personal_use_users:
                 file_name = PROFESSIONAL_USERS_FILENAME
 
+            # If the path already ends in .csv the caller named the file explicitly;
+            # otherwise a default filename is appended to the directory path
             if last_4_letters == CSV_EXTENSION:
                 file_name = str(save_file_to).split("\\")[-1]
                 output_path = save_file_to
