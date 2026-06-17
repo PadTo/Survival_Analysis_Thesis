@@ -1,26 +1,12 @@
-# Personal | Professional split
+# segments.py
 from dataclasses import dataclass
+
 
 @dataclass(frozen=True)
 class SegmentConfig:
-    hhi_threshold: int
-    car_share_abs: int
-    car_share_fraction: float
-    quantile_filter: float
-    burst_time_hr: float
+    """Segment-specific modelling parameters, tunable independently per group."""
+    churn_threshold_days: int
 
-PERSONAL = SegmentConfig(
-    hhi_threshold=6,
-    car_share_abs=4,
-    car_share_fraction=0.8,
-    quantile_filter=0.9,
-    burst_time_hr=1/30
-)
+PERSONAL = SegmentConfig(churn_threshold_days=160)
 
-PROFESSIONAL = SegmentConfig(
-    hhi_threshold=6,
-    car_share_abs=4,
-    car_share_fraction=0.8,
-    quantile_filter=0.9,
-    burst_time_hr=1/30
-)
+PROFESSIONAL = SegmentConfig(churn_threshold_days=80)
