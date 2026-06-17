@@ -33,6 +33,7 @@ PROFESSIONAL_USERS_FILENAME: str = "professional_users_dataset.csv"
 DEFAULT_THRESHOLD_DAYS: int = 160
 DEFAULT_HHI_THRESHOLD: int = 6
 DEFAULT_CAR_SHARE_ABS: int = 4
+BURST_TIME_HR = 1/30 # 2 Minutes
 DEFAULT_CAR_SHARE_FRACTION: float = 0.8
 MIN_ACTIVITY_SPAN_DAYS: int = 1
 
@@ -276,7 +277,23 @@ class DataCleaner:
         valid_users_mask = df[self.cols.user_id].isin(filtered_users.index)
 
         return df[valid_users_mask]
+    
+    def _filter_rows_from_burst(self,
+                            df: pd.DataFrame,
+                            burst_time_hr: float = BURST_TIME_HR) -> pd.DataFrame:
+        df = df.copy()
+        df[self.cols.activity_date] = pd.to_datetime(df[self.cols.activity_date])
+        df = df.sort_values([self.cols.user_id, self.cols.vehicle_id, self.cols.activity_date])
 
+        shifted = df.groupby([self.cols.user_id, self.cols.vehicle_id])[self.cols.activity_date].shift(1)
+
+        gap = df[self.cols.activity_date] - shifted
+
+        # First row per user-vehicle pair has no prior - keep it via NaT check
+        is_not_burst = gap.isna() | (gap >= pd.Timedelta(hours=burst_time_hr))
+
+        return df[is_not_burst].copy()
+    
     def filter_users_by_type(self,
                              df: pd.DataFrame,
                              inverse_hhi_threshold: int = DEFAULT_HHI_THRESHOLD,
@@ -304,7 +321,9 @@ class DataCleaner:
             if len(x) <= threshold:
                 return True
             return x.cumsum().iloc[threshold - 1] >= threshold_fraction
-
+        
+        df = self._filter_rows_from_burst(df)
+        
         per_user_prop_vehicle = (
             df.groupby(self.cols.user_id)[self.cols.vehicle_id]
             .value_counts(normalize=True)
