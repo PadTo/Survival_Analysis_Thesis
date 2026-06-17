@@ -3,6 +3,7 @@ IN_FIGURE_TEXT_SIZE_MULTIPLIER: float = 0.6
 PALETTE = {
     "Professional": "#1F4E79",
     "Personal": "#2A9D8F",
+    "Neutral": "#6B7280"
 }
 
 COLORS = {
