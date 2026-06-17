@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from matplotlib.axes import Axes
 import matplotlib as mpl
-from .constants.thesis_style import *
+from .constants.thesis_plotting_style import *
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
     CHURN_TRIGGERED_COL, VEHICLE_ID_COL, VEHICLE_MAKE_COL,
@@ -42,6 +42,7 @@ RANK_COL_NAME = "rank"
 #       to summarize the data (14days,28days,56days)
 # TODO: Implement a function that calculates seasonality
 # TODO: Implement a function for activity type distribution
+
 class PlottingData:
     def __init__(self):
      
@@ -181,14 +182,15 @@ class PlottingData:
             .alias(ACTIVITY_DATE_COL_SHIFTED)
         )
 
+        is_not_burst = "is_not_burst"
         df = df.with_columns(
             ((pl.col(ACTIVITY_DATE_COL) - pl.col(ACTIVITY_DATE_COL_SHIFTED))
             >= pl.duration(hours=burst_time_hr))
             .fill_null(True)  # first row per user-vehicle pair has no prior - keep it
-            .alias("is_not_burst")
+            .alias(is_not_burst)
         )
 
-        return df.filter(pl.col("is_not_burst")).drop([ACTIVITY_DATE_COL_SHIFTED, "is_not_burst"])
+        return df.filter(pl.col(is_not_burst)).drop([ACTIVITY_DATE_COL_SHIFTED, is_not_burst])
     
     def _compute_effective_hhi(self,
                                df: pl.DataFrame):
@@ -372,13 +374,70 @@ class PlottingData:
             print(f"Unexpected error {e}")
             raise e
 
+    def _process_df_for_seasonality(self, df: pl.DataFrame) -> pd.DataFrame:
+
+        df = self._filter_rows_from_burst(df)
+
+        df = df.with_columns(
+            pl.col(ACTIVITY_DATE_COL).dt.month().alias("month_num"),
+            pl.col(ACTIVITY_DATE_COL).dt.strftime("%B").alias("month")
+        )
+
+        return df.select(["month", "month_num"]).to_pandas()
+
+    def return_seasonality_plot(self,
+                                df: pl.DataFrame,
+                                ax: Axes | None = None,
+                                personal: bool = True):
+        try:
+            pandas_df = self._process_df_for_seasonality(df)
+            print(pandas_df)
+
+            if ax is None:
+                _, ax = plot.subplots()
+
+            plot_color = self.personal_colour if personal else self.professional_colour
+
+            month_order = [
+                "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"
+            ]
+
+            sns.countplot(
+                data=pandas_df,
+                x="month",
+                ax=ax,
+                order=month_order,
+                color=plot_color,
+                edgecolor=COLORS["text"],
+                linewidth=1.1
+            )
+
+            sns.despine(ax=ax)
+            ax.set_xlabel("Month", labelpad=10)
+            ax.set_ylabel("Activity Count", labelpad=10)
+            ax.tick_params(axis="x", rotation=45)
+
+            for label in ax.get_xticklabels():
+                label.set_ha("right")
+
+            ax.set_axisbelow(True)
+
+            return ax
+
+        except Exception as e:
+            print(f"Unexpected error {e}")
+            raise e
+
 data = pl.read_csv(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\interim\personal_users_raw.csv")
 data_pf = pl.read_csv(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\interim\professional_users_raw.csv")
 
 
 data_plotter = PlottingData()
 # data_plotter.return_user_split_plot(data)
-data_plotter.return_activity_distribution_plot(data)
+# data_plotter.return_activity_distribution_plot(data)
+
+data_plotter.return_seasonality_plot(data)
 # data_plotter.return_user_split_plot(data_pf,
 #                                     personal=False)
 
