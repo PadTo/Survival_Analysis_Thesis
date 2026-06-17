@@ -4,6 +4,7 @@ import seaborn as sns
 import pandas as pd
 import numpy as np
 from matplotlib.axes import Axes
+import matplotlib as mpl
 from .constants.thesis_style import *
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
@@ -19,6 +20,7 @@ from .constants.columns import (
 # ============================================================
 DEFAULT_CAR_SHARE_ABS = 4
 BURST_TIME_HR = 1/30 # 2 Minutes
+IN_FIGURE_TEXT_SIZE_MULTIPLIER = 0.6
 
 # ============================================================
 #  Fixed (non-templated) generated column names
@@ -40,7 +42,6 @@ RANK_COL_NAME = "rank"
 #       to summarize the data (14days,28days,56days)
 # TODO: Implement a function that calculates seasonality
 # TODO: Implement a function for activity type distribution
-# TODO: Implement a function for effective_HHI and top_4_car share distributions 
 class PlottingData:
     def __init__(self):
      
@@ -298,8 +299,10 @@ class PlottingData:
                 size=EFFECTIVE_HHI_COL_NAME,
                 color=plot_color,
                 edgecolor=COLORS["text"],
-                ax=ax, sizes=(5, 200), legend=True
+                alpha=0.8,
+                ax=ax, sizes=(1, 100), legend=True
                 )
+     
 
             return ax
 
@@ -307,13 +310,76 @@ class PlottingData:
         except Exception as e:
             print(f"Unexpected error {e}")
             raise e
+    
+    def _process_df_for_activity_distribution(self, df: pl.DataFrame) -> pd.DataFrame:
+        activity_counts = (
+            df.group_by(ACTIVITY_TYPE_COL)
+            .agg(pl.len().alias("count"))
+            .sort("count", descending=True)
+        )
+        return activity_counts.to_pandas()
 
+    def return_activity_distribution_plot(self,
+                                       df: pl.DataFrame,
+                                       ax: Axes | None = None,
+                                       personal: bool = True):
+        try:
+            pandas_df = self._process_df_for_activity_distribution(df)
+            total = pandas_df["count"].sum()
+
+            if ax is None:
+                _, ax = plot.subplots()
+
+            plot_color = self.personal_colour if personal else self.professional_colour
+
+            sns.barplot(
+                data=pandas_df,
+                x=ACTIVITY_TYPE_COL,
+                y="count",
+                ax=ax,
+                color=plot_color,
+                edgecolor=COLORS["text"],
+                linewidth=1.1
+            )
+
+            base = mpl.rcParams["font.size"]
+            for bar, count in zip(ax.patches, pandas_df["count"]):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height(),
+                    f"{count:,}\n({count / total * 100:.1f}%)",
+                    ha="center",
+                    va="bottom",
+                    fontweight="bold",
+                    fontsize=base * IN_FIGURE_TEXT_SIZE_MULTIPLIER
+
+                )
+
+            sns.despine(ax=ax)
+            ax.set_xlabel("Activity Type", labelpad=10)
+            ax.set_ylabel("Number of Activities", labelpad=10)
+            ax.tick_params(axis="x", rotation=35)
+
+            for label in ax.get_xticklabels():
+                label.set_ha("right")
+
+            ax.set_ylim(0, pandas_df["count"].max() * 1.18)
+            ax.set_axisbelow(True)
+
+            return ax
+
+        except Exception as e:
+            print(f"Unexpected error {e}")
+            raise e
 
 data = pl.read_csv(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\interim\personal_users_raw.csv")
-
+data_pf = pl.read_csv(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\interim\professional_users_raw.csv")
 
 
 data_plotter = PlottingData()
-data_plotter.return_user_split_plot(data)
+# data_plotter.return_user_split_plot(data)
+data_plotter.return_activity_distribution_plot(data)
+# data_plotter.return_user_split_plot(data_pf,
+#                                     personal=False)
 
 plot.show()
