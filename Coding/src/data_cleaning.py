@@ -35,6 +35,7 @@ DEFAULT_HHI_THRESHOLD: int = 6
 DEFAULT_CAR_SHARE_ABS: int = 4
 BURST_TIME_HR = 1/30 # 2 Minutes
 DEFAULT_CAR_SHARE_FRACTION: float = 0.8
+QUANTILE_FILTER_UNIQUE_VEHICLES = 0.9
 MIN_ACTIVITY_SPAN_DAYS: int = 1
 
 
@@ -299,7 +300,8 @@ class DataCleaner:
                              inverse_hhi_threshold: int = DEFAULT_HHI_THRESHOLD,
                              car_share_threshold_abs: int = DEFAULT_CAR_SHARE_ABS,
                              car_share_threshold_fraction: float = DEFAULT_CAR_SHARE_FRACTION,
-                             return_personal_use_users: bool = True
+                             return_personal_use_users: bool = True,
+                             quantile_filter_threshold = QUANTILE_FILTER_UNIQUE_VEHICLES
                              ) -> pd.DataFrame:
         """
         Splits users into personal or professional groups via HHI and car-share heuristics.
@@ -320,10 +322,14 @@ class DataCleaner:
             # by the absolute criterion, so they pass unconditionally
             if len(x) <= threshold:
                 return True
-            return x.cumsum().iloc[threshold - 1] >= threshold_fraction
+            return x.sort_values(ascending=False).cumsum().iloc[threshold - 1] >= threshold_fraction
         
         df = self._filter_rows_from_burst(df)
         
+        quantile_filter_value = df.groupby(USER_ID_COL)[VEHICLE_ID_COL].nunique().quantile(quantile_filter_threshold)
+        
+
+
         per_user_prop_vehicle = (
             df.groupby(self.cols.user_id)[self.cols.vehicle_id]
             .value_counts(normalize=True)
@@ -335,6 +341,8 @@ class DataCleaner:
             .sum()
             .pow(-1)
         )
+
+        quantile_mask_vehicle_mask = df.groupby(USER_ID_COL)[VEHICLE_ID_COL].nunique() <= quantile_filter_value
 
         effective_hhi_mask = per_user_effective_hhi <= inverse_hhi_threshold
 
@@ -350,7 +358,16 @@ class DataCleaner:
             )
         )
 
-        combined_or_mask = effective_hhi_mask | car_share_mask
+        inplace_ = True
+        asc = True
+        quantile_mask_vehicle_mask.sort_index(inplace=inplace_, ascending=asc)
+        effective_hhi_mask.sort_index(inplace=inplace_, ascending=asc)
+        car_share_mask.sort_index(inplace=inplace_, ascending=asc)
+        
+
+
+
+        combined_or_mask = quantile_mask_vehicle_mask | effective_hhi_mask | car_share_mask 
 
         if return_personal_use_users:
             print("Filtering by personal users!")
@@ -535,20 +552,22 @@ class DataCleaner:
 
 # Example usage:
 
-# df_ac = pd.read_csv(paths_to_files_and_folders.PATH_TO_RAW_ACTIVITY_DATA_1000)
-# df_vh = pd.read_csv(paths_to_files_and_folders.PATH_TO_RAW_VEHICLE_DATA_1000)
+df_ac = pd.read_csv(paths_to_files_and_folders.PATH_TO_RAW_ACTIVITY_DATA_1000)
+df_vh = pd.read_csv(paths_to_files_and_folders.PATH_TO_RAW_VEHICLE_DATA_1000)
 
-# data_cleaner = DataCleaner(df_ac, df_vh)
+data_cleaner = DataCleaner(df_ac, df_vh)
 
-# data_cleaner.get_clean_data(
-#     merge_data_frames=True,
-#     filter_nan_cols=["vehicle_id"],
-#     transform_vehicle_end_year_to_present=True,
-#     filter_by_user_type=True,
-#     filter_by_set_cutoff_date=True,
-#     return_personal_use_users=True,
-#     threshold_value=120,
-#     save_file_to=Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Coding\Data\interim"),
-#     filter_nan_vehicle_metadata=True,
-#     filter_one_day_users=True
-# )
+personal = data_cleaner.get_clean_data(
+                            merge_data_frames=True,
+                            # filter_inactivity=True,
+                            filter_nan_cols=None,
+                            filter_by_user_type=True,
+                            return_personal_use_users=True, # Personal
+                            filter_one_day_users=True, 
+                            # filter_by_set_cutoff_date=True,
+                            transform_vehicle_end_year_to_present=True,
+                            # filter_nan_vehicle_metadata = True,
+                            # threshold_value = 180,
+                            inverse_hhi_threshold = 6,
+                            car_share_threshold_abs = 4,
+                            car_share_threshold_fraction = 0.8)
