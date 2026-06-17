@@ -6,7 +6,7 @@ from sklearn.impute import KNNImputer
 import polars as pl
 from sklearn.model_selection import train_test_split
 from datetime import timedelta
-from .constants.variables_and_grouping import activity_type_groups, app_type_groups, brand_group_map
+from .constants.variables_groupings import activity_type_groups, app_type_groups, brand_group_map
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
     CHURN_TRIGGERED_COL, VEHICLE_ID_COL, VEHICLE_MAKE_COL,
