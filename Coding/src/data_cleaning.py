@@ -1,5 +1,4 @@
 import datetime
-from dataclasses import dataclass
 from pathlib import Path
 import pandas as pd
 from .constants import paths_to_files_and_folders
@@ -9,69 +8,25 @@ from .constants.columns import (
     VEHICLE_MODEL_COL, VEHICLE_END_YEAR_COL, VEHICLE_MILEAGE_COL,
     STILL_IN_PRODUCTION_COL,
 )
-
-
-# ============================================================
-#  Internal working columns (created and dropped within methods)
-# ============================================================
-NEXT_DATE_COL: str = "next_date"
-ACTIVITY_GAP_COL: str = "activity_gap"
-
-
-# ============================================================
-#  Output file handling
-# ============================================================
-CSV_EXTENSION: str = ".csv"
-DEFAULT_OUTPUT_FILENAME: str = "no_name.csv"
-PERSONAL_USERS_FILENAME: str = "personal_users_dataset.csv"
-PROFESSIONAL_USERS_FILENAME: str = "professional_users_dataset.csv"
-
-
-# ============================================================
-#  Tuning defaults
-# ============================================================
-DEFAULT_THRESHOLD_DAYS: int = 160
-DEFAULT_HHI_THRESHOLD: int = 6
-DEFAULT_CAR_SHARE_ABS: int = 4
-BURST_TIME_HR = 1/30 # 2 Minutes
-DEFAULT_CAR_SHARE_FRACTION: float = 0.8
-QUANTILE_FILTER_UNIQUE_VEHICLES = 0.9
-MIN_ACTIVITY_SPAN_DAYS: int = 1
-
-
-# ============================================================
-#  Sentinel values
-# ============================================================
-FILL_VALUE_CHURN_TRIGGERED: bool = False
-
-
-@dataclass
-class ColumnConfig:
-    """
-    Central schema configuration: every column name the pipeline reads or writes.
-    """
-    user_id: str = USER_ID_COL
-    activity_date: str = ACTIVITY_DATE_COL
-    vehicle_id: str = VEHICLE_ID_COL
-    vehicle_make: str = VEHICLE_MAKE_COL
-    vehicle_model: str = VEHICLE_MODEL_COL
-    vehicle_mileage: str = VEHICLE_MILEAGE_COL
-    vehicle_end_year: str = VEHICLE_END_YEAR_COL
-    still_in_production: str = STILL_IN_PRODUCTION_COL
-    churn_triggered: str = CHURN_TRIGGERED_COL
-    churn_adjusted_date: str = CHURN_ADJUSTED_DATE_COL
+from .constants.cleaning import (
+    NEXT_DATE_COL, ACTIVITY_GAP_COL,
+    CSV_EXTENSION, DEFAULT_OUTPUT_FILENAME,
+    PERSONAL_USERS_FILENAME, PROFESSIONAL_USERS_FILENAME,
+    DEFAULT_THRESHOLD_DAYS, DEFAULT_HHI_THRESHOLD, DEFAULT_CAR_SHARE_ABS,
+    DEFAULT_CAR_SHARE_FRACTION, QUANTILE_FILTER, BURST_TIME_HR,
+    MIN_ACTIVITY_SPAN_DAYS, FILL_VALUE_CHURN_TRIGGERED,
+)
+from .constants.segments import PERSONAL, PROFESSIONAL
 
 
 class DataCleaner:
     def __init__(self,
                  df_activity: pd.DataFrame,
-                 df_vehicle: pd.DataFrame,
-                 columns: ColumnConfig | None = None) -> None:
+                 df_vehicle: pd.DataFrame) -> None:
         self.df_activity = df_activity.copy(deep=True)
         self.df_vehicle = df_vehicle.copy(deep=True)
-        self.cols = columns or ColumnConfig()
 
-        self.max_date = pd.to_datetime(df_activity[self.cols.activity_date].max())
+        self.max_date = pd.to_datetime(df_activity[ACTIVITY_DATE_COL].max())
 
     def __step_counter(self, step_counter: int = 1) -> int:
         print(f"_Step {step_counter}_")
@@ -87,7 +42,7 @@ class DataCleaner:
         # ambiguous - keeping them would silently duplicate activity rows on merge
         dupe_users_mask = (
             self.df_vehicle
-            .groupby([self.cols.user_id, self.cols.vehicle_id])[self.cols.vehicle_id]
+            .groupby([USER_ID_COL, VEHICLE_ID_COL])[VEHICLE_ID_COL]
             .count()
             .gt(1)
             .groupby(level=0)
@@ -96,13 +51,13 @@ class DataCleaner:
         dupe_user_ids = dupe_users_mask[dupe_users_mask].index
 
         self.df_vehicle = self.df_vehicle[
-            ~self.df_vehicle[self.cols.user_id].isin(dupe_user_ids)
+            ~self.df_vehicle[USER_ID_COL].isin(dupe_user_ids)
         ]
 
         print(f"Rows before merging: {len(self.df_activity)}")
         df = self.df_vehicle.merge(
             self.df_activity,
-            on=[self.cols.vehicle_id, self.cols.user_id],
+            on=[VEHICLE_ID_COL, USER_ID_COL],
             how="right"
         )
         print(f"Rows after merging: {len(df)}")
@@ -125,8 +80,8 @@ class DataCleaner:
         print("Removing user_ids that aren't present in vehicle dataset")
         print(f"Rows before user filtering: {len(df)}")
 
-        unique_users = self.df_vehicle[self.cols.user_id].unique()
-        unique_users_mask = df[self.cols.user_id].isin(unique_users)
+        unique_users = self.df_vehicle[USER_ID_COL].unique()
+        unique_users_mask = df[USER_ID_COL].isin(unique_users)
 
         df = df[unique_users_mask]
 
@@ -158,16 +113,11 @@ class DataCleaner:
 
         df = df.copy(deep=True)
 
-        df[self.cols.activity_date] = pd.to_datetime(df[self.cols.activity_date])
-        df = df.sort_values([self.cols.user_id, self.cols.activity_date])
+        df[ACTIVITY_DATE_COL] = pd.to_datetime(df[ACTIVITY_DATE_COL])
+        df = df.sort_values([USER_ID_COL, ACTIVITY_DATE_COL])
 
-        df[NEXT_DATE_COL] = (
-            df.groupby(self.cols.user_id)[self.cols.activity_date].shift(-1)
-        )
-
-        df[ACTIVITY_GAP_COL] = (
-            df[NEXT_DATE_COL] - df[self.cols.activity_date]
-        )
+        df[NEXT_DATE_COL] = df.groupby(USER_ID_COL)[ACTIVITY_DATE_COL].shift(-1)
+        df[ACTIVITY_GAP_COL] = df[NEXT_DATE_COL] - df[ACTIVITY_DATE_COL]
 
         # Condition 1: gap between consecutive activities exceeds threshold
         gap_churn = (
@@ -178,34 +128,29 @@ class DataCleaner:
         is_last_row = df[NEXT_DATE_COL].isna()
 
         end_churn = is_last_row & (
-            (self.max_date - df[self.cols.activity_date]) >= pd.Timedelta(days=threshold_value)
+            (self.max_date - df[ACTIVITY_DATE_COL]) >= pd.Timedelta(days=threshold_value)
         )
 
-        df[self.cols.churn_triggered] = gap_churn | end_churn
+        df[CHURN_TRIGGERED_COL] = gap_churn | end_churn
 
         # cummax propagates the first True forward so all rows after the trigger
         # are also marked, letting the shift-mask below drop them cleanly
-        df[self.cols.churn_triggered] = (
-            df.groupby(self.cols.user_id)[self.cols.churn_triggered].cummax()
-        )
+        df[CHURN_TRIGGERED_COL] = df.groupby(USER_ID_COL)[CHURN_TRIGGERED_COL].cummax()
 
         # shift(1) offsets the cummax flag by one row so the trigger row itself
         # is kept (it is the churn event) but every row after it is dropped
         row_mask = (
-            df.groupby(self.cols.user_id)[self.cols.churn_triggered]
+            df.groupby(USER_ID_COL)[CHURN_TRIGGERED_COL]
             .shift(1, fill_value=FILL_VALUE_CHURN_TRIGGERED)
         )
 
         df = df[~row_mask]
 
-        df[self.cols.churn_adjusted_date] = df[self.cols.activity_date]
+        df[CHURN_ADJUSTED_DATE_COL] = df[ACTIVITY_DATE_COL]
 
         # Churn date is pushed forward by the threshold so the interval grid
         # covers the full at-risk window, not just the last observed activity
-        df.loc[
-            df[self.cols.churn_triggered],
-            self.cols.churn_adjusted_date
-        ] += pd.Timedelta(days=threshold_value)
+        df.loc[df[CHURN_TRIGGERED_COL], CHURN_ADJUSTED_DATE_COL] += pd.Timedelta(days=threshold_value)
 
         df.drop(columns=[ACTIVITY_GAP_COL, NEXT_DATE_COL], inplace=True)
 
@@ -218,11 +163,9 @@ class DataCleaner:
         """
         Removes rows with missing values in vehicle metadata columns.
         """
-        df = df.dropna(subset=columns_by_which_to_drop).copy()
-        return df.copy()
+        return df.dropna(subset=columns_by_which_to_drop).copy()
 
-    def filter_one_day_users(self,
-                             df: pd.DataFrame) -> pd.DataFrame:
+    def filter_one_day_users(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Removes users whose activity history spans only one day.
 
@@ -230,28 +173,22 @@ class DataCleaner:
         contribute meaningful interval-level features to the survival model.
         """
         df = df.copy(deep=True)
-        df[self.cols.activity_date] = pd.to_datetime(df[self.cols.activity_date])
+        df[ACTIVITY_DATE_COL] = pd.to_datetime(df[ACTIVITY_DATE_COL])
 
-        earliest_activity_per_user = df.groupby(self.cols.user_id)[self.cols.activity_date].min()
-        latest_activity_per_user = df.groupby(self.cols.user_id)[self.cols.activity_date].max()
+        earliest_activity_per_user = df.groupby(USER_ID_COL)[ACTIVITY_DATE_COL].min()
+        latest_activity_per_user   = df.groupby(USER_ID_COL)[ACTIVITY_DATE_COL].max()
 
-        diff_between_earliest_and_last_usage = (
-            latest_activity_per_user - earliest_activity_per_user
-        )
+        diff_between_earliest_and_last_usage = latest_activity_per_user - earliest_activity_per_user
 
         representative_users_mask = (
-            diff_between_earliest_and_last_usage > pd.Timedelta(
-                MIN_ACTIVITY_SPAN_DAYS, unit="days"
-            )
+            diff_between_earliest_and_last_usage > pd.Timedelta(MIN_ACTIVITY_SPAN_DAYS, unit="days")
         )
 
         representative_users = earliest_activity_per_user.index[representative_users_mask]
 
         print(f"Number of one-day-users: {sum(~representative_users_mask)}")
 
-        representative_user_df_mask = df[self.cols.user_id].isin(representative_users)
-
-        return df[representative_user_df_mask].copy()
+        return df[df[USER_ID_COL].isin(representative_users)].copy()
 
     def filter_users_by_set_cutoff_date(self,
                                         df: pd.DataFrame,
@@ -264,44 +201,40 @@ class DataCleaner:
         have churned by definition, so including them would inflate the censored
         fraction without contributing any churn signal.
         """
-        df[self.cols.activity_date] = pd.to_datetime(df[self.cols.activity_date])
+        df[ACTIVITY_DATE_COL] = pd.to_datetime(df[ACTIVITY_DATE_COL])
 
         users_first_app_use_date = pd.Series(
-            df.groupby(self.cols.user_id)[self.cols.activity_date].min()
+            df.groupby(USER_ID_COL)[ACTIVITY_DATE_COL].min()
         )
 
         filtered_users = users_first_app_use_date[
-            (self.max_date - users_first_app_use_date) >
-            pd.Timedelta(days=threshold_value)
+            (self.max_date - users_first_app_use_date) > pd.Timedelta(days=threshold_value)
         ]
 
-        valid_users_mask = df[self.cols.user_id].isin(filtered_users.index)
+        return df[df[USER_ID_COL].isin(filtered_users.index)]
 
-        return df[valid_users_mask]
-    
     def _filter_rows_from_burst(self,
-                            df: pd.DataFrame,
-                            burst_time_hr: float = BURST_TIME_HR) -> pd.DataFrame:
+                                df: pd.DataFrame,
+                                burst_time_hr: float = BURST_TIME_HR) -> pd.DataFrame:
         df = df.copy()
-        df[self.cols.activity_date] = pd.to_datetime(df[self.cols.activity_date])
-        df = df.sort_values([self.cols.user_id, self.cols.vehicle_id, self.cols.activity_date])
+        df[ACTIVITY_DATE_COL] = pd.to_datetime(df[ACTIVITY_DATE_COL])
+        df = df.sort_values([USER_ID_COL, VEHICLE_ID_COL, ACTIVITY_DATE_COL])
 
-        shifted = df.groupby([self.cols.user_id, self.cols.vehicle_id])[self.cols.activity_date].shift(1)
-
-        gap = df[self.cols.activity_date] - shifted
+        shifted = df.groupby([USER_ID_COL, VEHICLE_ID_COL])[ACTIVITY_DATE_COL].shift(1)
+        gap = df[ACTIVITY_DATE_COL] - shifted
 
         # First row per user-vehicle pair has no prior - keep it via NaT check
         is_not_burst = gap.isna() | (gap >= pd.Timedelta(hours=burst_time_hr))
 
         return df[is_not_burst].copy()
-    
+
     def filter_users_by_type(self,
                              df: pd.DataFrame,
                              inverse_hhi_threshold: int = DEFAULT_HHI_THRESHOLD,
                              car_share_threshold_abs: int = DEFAULT_CAR_SHARE_ABS,
                              car_share_threshold_fraction: float = DEFAULT_CAR_SHARE_FRACTION,
                              return_personal_use_users: bool = True,
-                             quantile_filter_threshold = QUANTILE_FILTER_UNIQUE_VEHICLES
+                             quantile_filter_threshold: float = QUANTILE_FILTER
                              ) -> pd.DataFrame:
         """
         Splits users into personal or professional groups via HHI and car-share heuristics.
@@ -309,9 +242,10 @@ class DataCleaner:
         The inverse HHI captures vehicle diversity: a low HHI (high diversity)
         signals a fleet operator. The car-share check catches concentrated usage
         even when total vehicle count is small, since a mechanic may service many
-        makes but each appears only once.
+        makes but each appears only once. The quantile filter catches high unique
+        vehicle counts that both HHI and car share miss at scale.
 
-        The two masks are OR'd so that a user classified as personal by either
+        The three masks are OR'd so that a user classified as personal by any
         criterion is kept in the personal group, erring on the side of inclusion.
         """
 
@@ -323,51 +257,45 @@ class DataCleaner:
             if len(x) <= threshold:
                 return True
             return x.sort_values(ascending=False).cumsum().iloc[threshold - 1] >= threshold_fraction
-        
-        df = self._filter_rows_from_burst(df)
-        
-        quantile_filter_value = df.groupby(USER_ID_COL)[VEHICLE_ID_COL].nunique().quantile(quantile_filter_threshold)
-        
 
+        df = self._filter_rows_from_burst(df)
+
+        quantile_filter_value = (
+            df.groupby(USER_ID_COL)[VEHICLE_ID_COL]
+            .nunique()
+            .quantile(quantile_filter_threshold)
+        )
 
         per_user_prop_vehicle = (
-            df.groupby(self.cols.user_id)[self.cols.vehicle_id]
+            df.groupby(USER_ID_COL)[VEHICLE_ID_COL]
             .value_counts(normalize=True)
         )
 
         per_user_effective_hhi = (
             per_user_prop_vehicle.pow(2)
-            .groupby(by=self.cols.user_id)
+            .groupby(by=USER_ID_COL)
             .sum()
             .pow(-1)
         )
 
-        quantile_mask_vehicle_mask = df.groupby(USER_ID_COL)[VEHICLE_ID_COL].nunique() <= quantile_filter_value
+        quantile_mask_vehicle_mask = (
+            df.groupby(USER_ID_COL)[VEHICLE_ID_COL].nunique() <= quantile_filter_value
+        )
 
         effective_hhi_mask = per_user_effective_hhi <= inverse_hhi_threshold
 
         car_share_mask = (
             per_user_prop_vehicle
-            .groupby(self.cols.user_id)
-            .apply(
-                lambda x: car_share_check(
-                    x,
-                    car_share_threshold_abs,
-                    car_share_threshold_fraction
-                )
-            )
+            .groupby(USER_ID_COL)
+            .apply(lambda x: car_share_check(x, car_share_threshold_abs, car_share_threshold_fraction))
         )
 
-        inplace_ = True
-        asc = True
-        quantile_mask_vehicle_mask.sort_index(inplace=inplace_, ascending=asc)
-        effective_hhi_mask.sort_index(inplace=inplace_, ascending=asc)
-        car_share_mask.sort_index(inplace=inplace_, ascending=asc)
-        
+        # Sorting indices so the OR operation aligns correctly across all three masks
+        quantile_mask_vehicle_mask.sort_index(inplace=True)
+        effective_hhi_mask.sort_index(inplace=True)
+        car_share_mask.sort_index(inplace=True)
 
-
-
-        combined_or_mask = quantile_mask_vehicle_mask | effective_hhi_mask | car_share_mask 
+        combined_or_mask = quantile_mask_vehicle_mask | effective_hhi_mask | car_share_mask
 
         if return_personal_use_users:
             print("Filtering by personal users!")
@@ -376,9 +304,7 @@ class DataCleaner:
             print("Filtering by professional users!")
             users = combined_or_mask[~combined_or_mask].index
 
-        users_mask = df[self.cols.user_id].isin(users)
-
-        return df[users_mask].copy()
+        return df[df[USER_ID_COL].isin(users)].copy()
 
     def get_clean_data(self,
                        merge_data_frames: bool = True,
@@ -417,13 +343,13 @@ class DataCleaner:
             print("Transforming missing vehicle_end_year values to current year")
 
             current_year = datetime.date.today().year
-            missing_before = df[self.cols.vehicle_end_year].isna().sum()
+            missing_before = df[VEHICLE_END_YEAR_COL].isna().sum()
 
             df = df.copy()
             # Null end year means the model is still in production; flagging before
             # filling so the boolean is derived from the original missingness pattern
-            df[self.cols.still_in_production] = df[self.cols.vehicle_end_year].isna()
-            df[self.cols.vehicle_end_year] = df[self.cols.vehicle_end_year].fillna(current_year)
+            df[STILL_IN_PRODUCTION_COL] = df[VEHICLE_END_YEAR_COL].isna()
+            df[VEHICLE_END_YEAR_COL] = df[VEHICLE_END_YEAR_COL].fillna(current_year)
 
             print(f"Current year used: {current_year}")
             print(f"Missing vehicle_end_year values filled: {missing_before}")
@@ -470,11 +396,7 @@ class DataCleaner:
             print()
 
         if filter_nan_vehicle_metadata:
-            columns = [
-                self.cols.vehicle_make,
-                self.cols.vehicle_model,
-                self.cols.vehicle_mileage
-            ]
+            columns = [VEHICLE_MAKE_COL, VEHICLE_MODEL_COL, VEHICLE_MILEAGE_COL]
 
             step = self.__step_counter(step)
 
@@ -493,19 +415,13 @@ class DataCleaner:
             print(f"Filtering activity after inactivity threshold: {threshold_value} days")
 
             row_count_before = len(df)
-            user_count_before = df[self.cols.user_id].nunique()
+            user_count_before = df[USER_ID_COL].nunique()
 
-            df = self.filter_after_inactivity(
-                df,
-                threshold_value=threshold_value
-            )
+            df = self.filter_after_inactivity(df, threshold_value=threshold_value)
 
             row_count_after = len(df)
-            user_count_after = df[self.cols.user_id].nunique()
-            churned_users = (
-                df[self.cols.churn_triggered].sum()
-                if self.cols.churn_triggered in df.columns else 0
-            )
+            user_count_after = df[USER_ID_COL].nunique()
+            churned_users = df[CHURN_TRIGGERED_COL].sum() if CHURN_TRIGGERED_COL in df.columns else 0
 
             print(f"Rows before inactivity filtering: {row_count_before}")
             print(f"Rows after inactivity filtering: {row_count_after}")
@@ -518,7 +434,7 @@ class DataCleaner:
         print()
         print("Cleaning complete")
         print(f"Final rows: {len(df)}")
-        print(f"Final unique users: {df[self.cols.user_id].nunique()}")
+        print(f"Final unique users: {df[USER_ID_COL].nunique()}")
         print()
 
         if save_file_to:
@@ -539,7 +455,6 @@ class DataCleaner:
             # If the path already ends in .csv the caller named the file explicitly;
             # otherwise a default filename is appended to the directory path
             if last_4_letters == CSV_EXTENSION:
-                file_name = str(save_file_to).split("\\")[-1]
                 output_path = save_file_to
                 df.to_csv(output_path, index=False)
                 return df
@@ -562,12 +477,12 @@ personal = data_cleaner.get_clean_data(
                             # filter_inactivity=True,
                             filter_nan_cols=None,
                             filter_by_user_type=True,
-                            return_personal_use_users=True, # Personal
-                            filter_one_day_users=True, 
+                            return_personal_use_users=True,
+                            filter_one_day_users=True,
                             # filter_by_set_cutoff_date=True,
                             transform_vehicle_end_year_to_present=True,
-                            # filter_nan_vehicle_metadata = True,
-                            # threshold_value = 180,
-                            inverse_hhi_threshold = 6,
-                            car_share_threshold_abs = 4,
-                            car_share_threshold_fraction = 0.8)
+                            # filter_nan_vehicle_metadata=True,
+                            # threshold_value=180,
+                            inverse_hhi_threshold=6,
+                            car_share_threshold_abs=4,
+                            car_share_threshold_fraction=0.8)
