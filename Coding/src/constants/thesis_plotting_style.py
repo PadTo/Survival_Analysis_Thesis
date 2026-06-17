@@ -1,4 +1,4 @@
-IN_FIGURE_TEXT_SIZE_MULTIPLIER: float = 0.6
+IN_FIGURE_TEXT_SIZE_MULTIPLIER: float = 0.8
 
 PALETTE = {
     "Professional": "#1F4E79",
