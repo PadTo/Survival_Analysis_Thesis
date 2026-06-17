@@ -229,6 +229,11 @@ class PlottingData:
 
             hist_color = self._segment_colour(personal)
 
+            if quantile_boundary:
+                boundary_value = activity_gaps[ACTIVITY_GAP_COL_NAME].quantile(quantile_boundary)
+                # Clip the data itself rather than just the axis so histplot bins within the visible range
+                pandas_data = pandas_data[pandas_data[ACTIVITY_GAP_COL_NAME] <= boundary_value]
+
             sns.histplot(
                 data=pandas_data,
                 x=ACTIVITY_GAP_COL_NAME,
@@ -239,6 +244,7 @@ class PlottingData:
                 alpha=0.9,
                 kde=True,
                 line_kws={"linewidth": 1.6},
+                bins=60,   # fixed count, computed over the clipped range
             )
 
             # Recolour the KDE curve so it reads as an accent against the bars
