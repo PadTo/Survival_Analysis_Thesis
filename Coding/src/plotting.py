@@ -18,7 +18,7 @@ from .constants.columns import (
 #  Tuning defaults
 # ============================================================
 DEFAULT_CAR_SHARE_ABS = 4
-BURST_TIME_HR = 1/30 # 2 Minute
+BURST_TIME_HR = 1/30 # 2 Minutes
 
 # ============================================================
 #  Fixed (non-templated) generated column names
