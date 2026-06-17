@@ -1,3 +1,5 @@
+IN_FIGURE_TEXT_SIZE_MULTIPLIER: float = 0.6
+
 PALETTE = {
     "Professional": "#1F4E79",
     "Personal": "#2A9D8F",
@@ -13,8 +15,7 @@ COLORS = {
     "highlight": "#9B2C2C",
 }
 
-FONT = "DejaVu Sans"
-
+FONT: str = "DejaVu Sans"
 
 SEABORN_THEME = {
     "style": "whitegrid",
@@ -40,4 +41,3 @@ SEABORN_THEME = {
         "legend.frameon": False,
     },
 }
-
