@@ -82,7 +82,7 @@ class DataCleaner:
         """
 
         # Users with the same vehicle_id appearing under different metadata rows are
-        # ambiguous — keeping them would silently duplicate activity rows on merge
+        # ambiguous - keeping them would silently duplicate activity rows on merge
         dupe_users_mask = (
             self.df_vehicle
             .groupby([self.cols.user_id, self.cols.vehicle_id])[self.cols.vehicle_id]
@@ -119,7 +119,7 @@ class DataCleaner:
             print()
 
         # Activity rows with no matching vehicle cannot carry make/model/age metadata
-        # downstream, so they are removed rather than carried as nulls
+        # downstream, so the users that don't exist in the vehicle dataset are removed
         print("Removing user_ids that aren't present in vehicle dataset")
         print(f"Rows before user filtering: {len(df)}")
 
