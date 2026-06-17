@@ -16,7 +16,6 @@ from .constants.cleaning import (
     DEFAULT_CAR_SHARE_FRACTION, QUANTILE_FILTER, BURST_TIME_HR,
     MIN_ACTIVITY_SPAN_DAYS, FILL_VALUE_CHURN_TRIGGERED,
 )
-from .constants.segments import PERSONAL, PROFESSIONAL
 
 
 class DataCleaner:
