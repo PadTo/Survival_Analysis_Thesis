@@ -1,9 +1,3 @@
-# ============================================================
-#  Internal working columns (created and dropped within methods)
-# ============================================================
-NEXT_DATE_COL: str    = "next_date"
-ACTIVITY_GAP_COL: str = "activity_gap"
-SHIFTED_DATE_COL: str = "activity_date_shifted"
 
 
 # ============================================================
@@ -25,8 +19,3 @@ DEFAULT_CAR_SHARE_FRACTION: float   = 0.8
 QUANTILE_FILTER: float              = 0.9
 BURST_TIME_HR: float                = 1/3
 MIN_ACTIVITY_SPAN_DAYS: int         = 1
-
-# ============================================================
-#  Sentinel values
-# ============================================================
-FILL_VALUE_CHURN_TRIGGERED: bool = False

@@ -9,14 +9,25 @@ from .constants.columns import (
     STILL_IN_PRODUCTION_COL,
 )
 from .constants.cleaning import (
-    NEXT_DATE_COL, ACTIVITY_GAP_COL,
     CSV_EXTENSION, DEFAULT_OUTPUT_FILENAME,
     PERSONAL_USERS_FILENAME, PROFESSIONAL_USERS_FILENAME,
     DEFAULT_THRESHOLD_DAYS, DEFAULT_HHI_THRESHOLD, DEFAULT_CAR_SHARE_ABS,
     DEFAULT_CAR_SHARE_FRACTION, QUANTILE_FILTER, BURST_TIME_HR,
-    MIN_ACTIVITY_SPAN_DAYS, FILL_VALUE_CHURN_TRIGGERED,
+    MIN_ACTIVITY_SPAN_DAYS
 )
 
+
+# ============================================================
+#  Internal working columns (created and dropped within methods)
+# ============================================================
+NEXT_DATE_COL: str    = "next_date"
+ACTIVITY_GAP_COL: str = "activity_gap"
+SHIFTED_DATE_COL: str = "activity_date_shifted"
+
+# ============================================================
+#  Sentinel values
+# ============================================================
+FILL_VALUE_CHURN_TRIGGERED: bool = False
 
 class DataCleaner:
     def __init__(self,
