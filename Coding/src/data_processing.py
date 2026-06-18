@@ -735,13 +735,25 @@ class DataProcessor():
 
 
         agg += [pl.col(CHURN_TRIGGERED_COL).max()]
-        post_agg_1 += [pl.col(CHURN_TRIGGERED_COL)
-                       # Even though churn is triggered in the last period, the feature values
-                       # must be taken from the previous period (shifting for correct assignment)
-                       .shift(-1) # Depends on the prior sort, won't work if the dataset isn't correctly sorted
-                       .over(USER_ID_COL)
-                       .fill_null(False) # This does not matter as much because the last row will be removed either way (incomplete intervals)
-                       .alias(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)]
+
+
+        # First-interval churners can survive the upstream span filter.
+        # This keeps their label on the first interval instead of shifting it into a null.
+        post_agg_1 += [
+            pl.when(
+                (pl.col(INTERVAL_START_COL).min().over(USER_ID_COL) == pl.col(INTERVAL_START_COL))
+                & (pl.col(CHURN_TRIGGERED_COL) == True))
+            .then(pl.col(CHURN_TRIGGERED_COL))
+            .otherwise(
+                    pl.col(CHURN_TRIGGERED_COL)
+                    # Even though churn is triggered in the last period, the feature values
+                    # must be taken from the previous period (shifting for correct assignment)
+                    .shift(-1) # Depends on the prior sort, won't work if the dataset isn't correctly sorted
+                    .over(USER_ID_COL)
+                    .fill_null(False)) # This does not matter as much because the last row will be removed either way (incomplete intervals)
+            .alias(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)]
+
+                 
         
         column_names_to_keep += [CHURN_TRIGGERED_SHIFTED_COLUMN_NAME]
         return agg, post_agg_1, column_names_to_keep
@@ -786,7 +798,7 @@ class DataProcessor():
                 .alias(FIRST_DISTINCT_COLUMN_NAME)
             )
 
-
+          
             agg: list = []
             post_agg_1: list = []
             post_agg_2: list = []
@@ -827,7 +839,7 @@ class DataProcessor():
                     first_period,
                     second_period)
 
-
+         
             agg += agg_af + agg_app + agg_b + agg_vehicle + agg_churn
 
     
@@ -840,7 +852,7 @@ class DataProcessor():
                 column_names_to_keep_churn
             )
 
-         
+            
             post_agg_1 += post_agg_1_af + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle + post_agg_1_churn
             post_agg_2 += post_agg_2_af + post_agg_2_app + post_agg_2_b + post_agg_2_vehicle
             post_agg_3 += post_agg_3_af + post_agg_3_app + post_agg_3_b + post_agg_3_vehicle
@@ -857,17 +869,23 @@ class DataProcessor():
                 .with_columns(post_agg_4)
             )
 
-            
+
             # Drop each user's final interval: it is incomplete (no full interval of activity
             # observed) and its real churn label has already been shifted back onto the prior row
 
             d = (d
                 .with_columns(
                     (pl.col(INTERVAL_START_COL) == pl.col(INTERVAL_START_COL).max().over(USER_ID_COL))
-                    .alias("_is_last_interval")
+                    .alias("_is_last_interval"),
+                    (pl.col(INTERVAL_START_COL) == pl.col(INTERVAL_START_COL).min().over(USER_ID_COL))
+                    .alias("_is_first_interval"),
                 )
-                .filter(~pl.col("_is_last_interval"))
-                .drop("_is_last_interval")
+                # Drop the incomplete final interval, EXCEPT when it is also the user's first
+                # interval and carries a churn label - those are the rescued first-interval
+                # churners whose label was deliberately kept rather than shifted away.
+                .filter(~pl.col("_is_last_interval") 
+                        | pl.col("_is_first_interval") & pl.col(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME))
+                .drop(["_is_last_interval","_is_first_interval"])
                 .select(column_names_to_keep)
             )
 
@@ -978,11 +996,16 @@ class DataProcessor():
     
 
 
-# from src.constants import paths_to_files_and_folders as const
+from src.constants import paths_to_files_and_folders as const
 
-# path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
-# data_ = pl.read_csv(path_to_personal_filtered)
+path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+data_ = pl.read_csv(path_to_personal_filtered)
 
-# dp = DataProcessor(data_)
+dp = DataProcessor(data_)
 
-# a = dp.apply_feature_engineering(data_)
+a = dp.apply_feature_engineering(data_)
+
+print(a)
+print(a[CHURN_TRIGGERED_SHIFTED_COLUMN_NAME].sum())
+# print(a[CHURN_TRIGGERED_SHIFTED_COLUMN_NAME].sum())
+# print(a.filter((pl.col(INTERVAL_START_COL).min() == pl.col(INTERVAL_START_COL)).over(USER_ID_COL)).select(pl.col(CHURN_TRIGGERED_COL)).sum())
