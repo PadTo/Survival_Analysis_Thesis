@@ -17,5 +17,5 @@ DEFAULT_HHI_THRESHOLD: int          = 6
 DEFAULT_CAR_SHARE_ABS: int          = 4
 DEFAULT_CAR_SHARE_FRACTION: float   = 0.8
 QUANTILE_FILTER: float              = 0.9
-BURST_TIME_HR: float                = 1/3
-MIN_ACTIVITY_SPAN_DAYS: int         = 1 # This should remain 1 as it filters out one-day users
+BURST_TIME_HR: float                = 1/30
+MIN_ACTIVITY_SPAN_DAYS: int         = 28
