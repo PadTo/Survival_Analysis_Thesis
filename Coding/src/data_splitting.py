@@ -1,7 +1,9 @@
 import math
 import pandas as pd
 import polars as pl
+from pathlib import Path
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OrdinalEncoder
 from sklearn.preprocessing import LabelEncoder
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split
@@ -25,9 +27,33 @@ class DataSplitter():
     def __init__(self, df: pd.DataFrame | pl.DataFrame) -> None:
         self.df = df.copy(deep=True) if type(df) == pd.DataFrame else df
 
+
+    def _create_order_mileage_buckets(self,
+                                     df:pl.DataFrame):
+        ordered_buckets = (
+            df
+            .select(pl.col(VEHICLE_MILEAGE_COL).unique())
+            .with_columns(
+                pl.col(VEHICLE_MILEAGE_COL)
+                .str.replace_all(r"[ >]", "")        # strip spaces and '>'
+                .str.split("-")
+                .list.first()                         # lower edge
+                .cast(pl.Int64)
+                .alias("_lower")
+            )
+            .sort("_lower")
+            .get_column(VEHICLE_MILEAGE_COL)
+            .to_list()
+        )
+
+        return ordered_buckets
+
     def KNN_impute_vehicle_start_year(self,
                                       df: pl.DataFrame,
-                                      n_neighbours: int = N_NEIGHBOURS) -> pl.DataFrame:
+                                      KNN_imputer_fitted: KNNImputer | None = None,
+                                      one_hot_enc_fitted: OneHotEncoder | None = None,
+                                      ordinal_enc_fitted: OrdinalEncoder | None = None,
+                                      n_neighbours: int = N_NEIGHBOURS) -> tuple[pl.DataFrame, KNNImputer,OneHotEncoder,OrdinalEncoder]:
 
         """
         Imputes missing vehicle_start_year from vehicle make and mileage using KNN.
@@ -44,9 +70,24 @@ class DataSplitter():
             Polars DataFrame with missing vehicle_start_year values filled.
             Returns the original DataFrame unchanged if an error occurs.
         """
-        KNN_imputer = KNNImputer(n_neighbors=n_neighbours)
-        one_hot_enc = OneHotEncoder(sparse_output=False)
-        label_enc = LabelEncoder()
+        
+        if KNN_imputer_fitted is None:
+            KNN_imputer = KNNImputer(n_neighbors=n_neighbours)
+        else:
+            KNN_imputer = KNN_imputer_fitted
+
+        if one_hot_enc_fitted is None:
+            one_hot_enc = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+        else:
+            one_hot_enc = one_hot_enc_fitted
+
+        if ordinal_enc_fitted is None:
+            ordered_buckets = self._create_order_mileage_buckets(df)
+            ordinal_enc = OrdinalEncoder(categories=[ordered_buckets],
+                                         handle_unknown="use_encoded_value",
+                                         unknown_value=-1,)
+        else:
+            ordinal_enc = ordinal_enc_fitted
 
         try:
             # Deduplicating to one row per vehicle so KNN fits on distinct vehicles only
@@ -56,19 +97,31 @@ class DataSplitter():
                 .unique(subset=[VEHICLE_ID_COL])
                 .to_pandas())
 
-            vehicle_make_one_hot = one_hot_enc.fit_transform(vehicle_df[[VEHICLE_MAKE_COL]])
-            vehicle_mileage_label = label_enc.fit_transform(vehicle_df[VEHICLE_MILEAGE_COL])
+            if one_hot_enc_fitted is None:
+                vehicle_make_one_hot = one_hot_enc.fit_transform(vehicle_df[[VEHICLE_MAKE_COL]])
+            else:
+                vehicle_make_one_hot = one_hot_enc.transform(vehicle_df[[VEHICLE_MAKE_COL]])
+
+            if ordinal_enc_fitted is None:
+                vehicle_mileage_label = ordinal_enc.fit_transform(vehicle_df[[VEHICLE_MILEAGE_COL]])
+            else:
+                vehicle_mileage_label = ordinal_enc.transform(vehicle_df[[VEHICLE_MILEAGE_COL]])
 
             imputed_df = pd.DataFrame(
                 vehicle_make_one_hot,
                 columns=one_hot_enc.get_feature_names_out(),
                 index=vehicle_df.index
             )
-            imputed_df["vehicle_mileage_cat"] = vehicle_mileage_label
+            
+            imputed_df["vehicle_mileage_cat"] = vehicle_mileage_label[:, 0]
             # Start year placed last so the imputed target is recoverable as the final column
             imputed_df[VEHICLE_START_YEAR_COL] = vehicle_df[VEHICLE_START_YEAR_COL].values
 
-            X_imputed = KNN_imputer.fit_transform(imputed_df)
+            if KNN_imputer_fitted is not None:
+                X_imputed = KNN_imputer.transform(imputed_df)
+            else:
+                X_imputed = KNN_imputer.fit_transform(imputed_df)
+
             vehicle_df[VEHICLE_START_YEAR_COL] = X_imputed[:, -1]
 
             imputed_col = f"{VEHICLE_START_YEAR_COL}_imputed"
@@ -83,11 +136,11 @@ class DataSplitter():
                 .with_columns(pl.col(imputed_col).alias(VEHICLE_START_YEAR_COL))
                 .drop(imputed_col))
 
-            return df
+            return df, KNN_imputer, one_hot_enc, ordinal_enc
 
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
-            return df
+            return df, KNN_imputer, one_hot_enc, ordinal_enc
 
     def split_train_val_test(self,
                              df: pl.DataFrame,
@@ -171,11 +224,72 @@ class DataSplitter():
         print(len(train_data), len(test_data))
         return train_data, test_data
 
-    def split_data_and_process(self,
-                               df: pl.DataFrame) -> None:
-        train_df, train_df, train_df = self.split_train_val_test(df,
-                                                                train_size=0.8,
-                                                                test_size=0.1,
-                                                                val_size=0.1)
+    def prepare_dataset(    self,
+                            df: pl.DataFrame,
+                            random_state: int = 42,
+                            train_size : float = 0.8,
+                            test_size: float = 0.1,
+                            val_size: float | None = None,
+                            personal: bool = True,
+                            save_path: Path | None = None) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame] | tuple[pl.DataFrame, pl.DataFrame]:
+        """
+        Steps:
+            1. Splits the dataset into train, val, and test if val_size is set, otherwise train and test
+            2. Imputes missing vehicle start_years using KNN imputer based via label and one hot encoders on mileage and make columns, respectively
+            3. (OPTIONAL) Save the dataset into the specificed location
 
-        self.KNN_impute_vehicle_start_year(train_df,)
+        Args:
+            df:            Input Polars DataFrame with user activity logs.
+            random_state:  Random seed for reproducibility. Default 42.
+            test_size:     Proportion of users allocated to the test set. Default 0.1.
+            val_size:      Proportion of users allocated to validation. If None, no
+                           validation set is produced. Default None.
+
+        Returns:
+            (train_data_imputed, val_data_imputed, test_data_imputed) if val_size is set, else (train_data_imputed, test_data_imputed).
+        """
+
+        
+        if save_path:
+            save_path.mkdir(parents=True,exist_ok=True)
+            user_group = "personal" if personal else "professional"
+            train_data_path = save_path / ("training_data_" + user_group + ".csv")
+            validation_data_path = save_path / ("validation_data_" + user_group + ".csv")
+            testing_data_path = save_path / ("testing_data_" + user_group + ".csv")
+ 
+
+        if val_size:
+
+            train_df, val_df, test_df = self.split_train_val_test(df,
+                                                                random_state = random_state,
+                                                                train_size=train_size,
+                                                                test_size=test_size,
+                                                                val_size=val_size)
+
+            train_df_imputed, KNN_imputer, one_hot_enc, ordinal_enc = self.KNN_impute_vehicle_start_year(train_df)
+            val_df_imputed  , _, _, _   = self.KNN_impute_vehicle_start_year( val_df, KNN_imputer, one_hot_enc, ordinal_enc)
+            test_df_imputed , _, _, _   = self.KNN_impute_vehicle_start_year(test_df, KNN_imputer, one_hot_enc, ordinal_enc)
+
+
+
+            if save_path:
+                train_df_imputed.write_csv(train_data_path)
+                val_df_imputed.write_csv(validation_data_path)
+                test_df_imputed.write_csv(testing_data_path)
+
+            return train_df_imputed, val_df_imputed, test_df_imputed
+        
+        else:
+            train_df, test_df = self.split_train_val_test(df,
+                                                        random_state = random_state,
+                                                        train_size=train_size,
+                                                        test_size=test_size)
+
+            train_df_imputed, KNN_imputer, one_hot_enc, ordinal_enc = self.KNN_impute_vehicle_start_year(train_df)
+            test_df_imputed , _, _, _   = self.KNN_impute_vehicle_start_year(test_df, KNN_imputer, one_hot_enc, ordinal_enc)
+
+            if save_path:
+                train_df_imputed.write_csv(train_data_path)
+                test_df_imputed.write_csv(testing_data_path)
+
+            return train_df_imputed, test_df_imputed
