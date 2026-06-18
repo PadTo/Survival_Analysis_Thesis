@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from matplotlib.axes import Axes
 import matplotlib as mpl
-from .constants.thesis_plotting_style import PALETTE, COLORS, SEABORN_THEME
+from .constants.thesis_plotting_style import PALETTE, COLORS, SEABORN_THEME, SCATTER_PLOT_SIZE_RANGE
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
     CHURN_TRIGGERED_COL, VEHICLE_ID_COL, VEHICLE_MAKE_COL,
@@ -428,7 +428,7 @@ class PlottingData:
                 linewidth=0.4,
                 alpha=0.75,
                 ax=ax,
-                sizes=(15, 220),
+                sizes=SCATTER_PLOT_SIZE_RANGE,
                 legend="brief",
             )
 
@@ -602,9 +602,14 @@ class PlottingData:
             if ax is None:
                 _, ax = plot.subplots()
 
+            if personal == None:
+                legend_label = "All users"
+            else:
+                legend_label = "Personal" if personal else "Professional"
+
             plot_color = self._segment_colour(personal)
 
-            sns.barplot(data=pandas_df, x=VEHICLE_MAKE_COL, y="count", ax=ax, color=plot_color)
+            sns.barplot(data=pandas_df, x=VEHICLE_MAKE_COL, y="count", ax=ax, color=plot_color,legend=legend_label)
 
             self._apply_bar_gradient(ax, plot_color)
             self._annotate_bar_values(ax, pandas_df["count"], total)
