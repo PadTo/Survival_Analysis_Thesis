@@ -190,6 +190,7 @@ class DataCleaner:
 
         diff_between_earliest_and_last_usage = latest_activity_per_user - earliest_activity_per_user
 
+        # Min activity span MUST be 1, it's only a constant for future functionality
         representative_users_mask = (
             diff_between_earliest_and_last_usage > pd.Timedelta(MIN_ACTIVITY_SPAN_DAYS, unit="days")
         )
@@ -268,6 +269,7 @@ class DataCleaner:
                 return True
             return x.sort_values(ascending=False).cumsum().iloc[threshold - 1] >= threshold_fraction
 
+        # Reducing bursty activities as it inflates ("fake" signals of unique usage) the usage of specific vehicles
         df = self._filter_rows_from_burst(df)
 
         quantile_filter_value = (
@@ -450,49 +452,25 @@ class DataCleaner:
         if save_file_to:
             step = self.__step_counter(step)
 
-            print(f"Saving File to {str(save_file_to)}")
-
-            string_length = len(str(save_file_to).split("\\")[-1])
-            last_4_letters = str(save_file_to).split("\\")[-1][string_length - 4:]
+            save_file_to = Path(save_file_to)
+            print(f"Saving File to {save_file_to}")
 
             file_name = DEFAULT_OUTPUT_FILENAME
 
             if filter_by_user_type and return_personal_use_users:
                 file_name = PERSONAL_USERS_FILENAME
+                
             elif filter_by_user_type and not return_personal_use_users:
                 file_name = PROFESSIONAL_USERS_FILENAME
 
-            # If the path already ends in .csv the caller named the file explicitly;
-            # otherwise a default filename is appended to the directory path
-            if last_4_letters == CSV_EXTENSION:
+            # If the caller named a .csv file, use it directly; otherwise treat the
+            # path as a directory and append the default filename
+            if save_file_to.suffix == CSV_EXTENSION:
                 output_path = save_file_to
-                df.to_csv(output_path, index=False)
-                return df
+            else:
+                output_path = save_file_to / file_name
 
-            output_path = save_file_to / file_name
             df.to_csv(output_path, index=False)
 
         return df
 
-
-# Example usage:
-
-df_ac = pd.read_csv(paths_to_files_and_folders.PATH_TO_RAW_ACTIVITY_DATA_1000)
-df_vh = pd.read_csv(paths_to_files_and_folders.PATH_TO_RAW_VEHICLE_DATA_1000)
-
-data_cleaner = DataCleaner(df_ac, df_vh)
-
-personal = data_cleaner.get_clean_data(
-                            merge_data_frames=True,
-                            # filter_inactivity=True,
-                            filter_nan_cols=None,
-                            filter_by_user_type=True,
-                            return_personal_use_users=True,
-                            filter_one_day_users=True,
-                            # filter_by_set_cutoff_date=True,
-                            transform_vehicle_end_year_to_present=True,
-                            # filter_nan_vehicle_metadata=True,
-                            # threshold_value=180,
-                            inverse_hhi_threshold=6,
-                            car_share_threshold_abs=4,
-                            car_share_threshold_fraction=0.8)
