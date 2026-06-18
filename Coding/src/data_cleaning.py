@@ -174,7 +174,7 @@ class DataCleaner:
         Removes rows with missing values in vehicle metadata columns.
         """
         return df.dropna(subset=columns_by_which_to_drop).copy()
-
+    
     def filter_early_churners(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Removes users whose activity history spans fewer than MIN_ACTIVITY_SPAN_DAYS days.
@@ -241,6 +241,9 @@ class DataCleaner:
 
         # First row per user-vehicle pair has no prior - keep it via NaT check
         is_not_burst = gap.isna() | (gap >= pd.Timedelta(hours=burst_time_hr))
+        
+        
+
 
         return df[is_not_burst].copy()
 
@@ -374,17 +377,7 @@ class DataCleaner:
             print(f"Missing vehicle_end_year values filled: {missing_before}")
             print()
 
-        if filter_early_churners:
-            step = self.__step_counter(step)
 
-            row_count_before = len(df)
-            df = self.filter_early_churners(df)
-            row_count_after = len(df)
-
-            print(f"Rows before early-churner filtering: {row_count_before}")
-            print(f"Rows after early-churner filtering: {row_count_after}")
-            print(f"Rows removed: {row_count_before - row_count_after}")
-            print()
 
         if filter_by_set_cutoff_date:
             step = self.__step_counter(step)
@@ -448,6 +441,18 @@ class DataCleaner:
             print(f"Unique users before: {user_count_before}")
             print(f"Unique users after: {user_count_after}")
             print(f"Churn-triggering rows: {churned_users}")
+            print()
+        
+        if filter_early_churners:
+            step = self.__step_counter(step)
+
+            row_count_before = len(df)
+            df = self.filter_early_churners(df)
+            row_count_after = len(df)
+
+            print(f"Rows before early-churner filtering: {row_count_before}")
+            print(f"Rows after early-churner filtering: {row_count_after}")
+            print(f"Rows removed: {row_count_before - row_count_after}")
             print()
 
         print()
