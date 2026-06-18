@@ -175,12 +175,18 @@ class DataCleaner:
         """
         return df.dropna(subset=columns_by_which_to_drop).copy()
 
-    def filter_one_day_users(self, df: pd.DataFrame) -> pd.DataFrame:
+    def filter_early_churners(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Removes users whose activity history spans only one day.
+        Removes users whose activity history spans fewer than MIN_ACTIVITY_SPAN_DAYS days.
 
-        Single-day users have no observable inactivity pattern and cannot
-        contribute meaningful interval-level features to the survival model.
+        Such users cannot accumulate a complete interval of observed behaviour, so every
+        windowed feature would be built from a partial window - measurement truncation
+        rather than signal. They are excluded so the model is conditioned on users with
+        at least one full interval of history.
+
+        Note: MIN_ACTIVITY_SPAN_DAYS must stay aligned with INTERVAL_IN_DAYS in
+        constants.processor - both encode "one complete interval". If the interval
+        width changes, this span threshold should track it.
         """
         df = df.copy(deep=True)
         df[ACTIVITY_DATE_COL] = pd.to_datetime(df[ACTIVITY_DATE_COL])
@@ -190,14 +196,13 @@ class DataCleaner:
 
         diff_between_earliest_and_last_usage = latest_activity_per_user - earliest_activity_per_user
 
-        # Min activity span MUST be 1, it's only a constant for future functionality
         representative_users_mask = (
-            diff_between_earliest_and_last_usage > pd.Timedelta(MIN_ACTIVITY_SPAN_DAYS, unit="days")
+            diff_between_earliest_and_last_usage >= pd.Timedelta(MIN_ACTIVITY_SPAN_DAYS, unit="days")
         )
 
         representative_users = earliest_activity_per_user.index[representative_users_mask]
 
-        print(f"Number of one-day-users: {sum(~representative_users_mask)}")
+        print(f"Number of early churners removed: {sum(~representative_users_mask)}")
 
         return df[df[USER_ID_COL].isin(representative_users)].copy()
 
@@ -324,7 +329,7 @@ class DataCleaner:
                        filter_nan_cols: list[str] | None = None,
                        filter_by_user_type: bool = False,
                        return_personal_use_users: bool = False,
-                       filter_one_day_users: bool = False,
+                       filter_early_churners: bool = False,
                        filter_by_set_cutoff_date: bool = False,
                        transform_vehicle_end_year_to_present: bool = False,
                        filter_nan_vehicle_metadata: bool = False,
@@ -338,9 +343,11 @@ class DataCleaner:
         Orchestrates the full cleaning pipeline.
 
         Steps are opt-in via boolean flags so the caller controls exactly which
-        transformations run without subclassing or monkey-patching. Order matters:
-        end-year imputation should precede inactivity filtering so churn_adjusted_date
-        is computed on a complete vehicle age column.
+        transformations run without subclassing or monkey-patching. The order as
+        executed below is: merge -> end-year imputation -> early-churner filtering
+        -> set-cutoff filtering -> user-type split -> nan-metadata filtering ->
+        inactivity filtering. End-year imputation precedes inactivity filtering so
+        churn_adjusted_date is computed on a complete vehicle age column.
         """
         step = 1
         df = self.df_activity.copy()
@@ -367,15 +374,15 @@ class DataCleaner:
             print(f"Missing vehicle_end_year values filled: {missing_before}")
             print()
 
-        if filter_one_day_users:
+        if filter_early_churners:
             step = self.__step_counter(step)
 
             row_count_before = len(df)
-            df = self.filter_one_day_users(df)
+            df = self.filter_early_churners(df)
             row_count_after = len(df)
 
-            print(f"Rows before one-day-user filtering: {row_count_before}")
-            print(f"Rows after one-day-user filtering: {row_count_after}")
+            print(f"Rows before early-churner filtering: {row_count_before}")
+            print(f"Rows after early-churner filtering: {row_count_after}")
             print(f"Rows removed: {row_count_before - row_count_after}")
             print()
 
@@ -459,7 +466,7 @@ class DataCleaner:
 
             if filter_by_user_type and return_personal_use_users:
                 file_name = PERSONAL_USERS_FILENAME
-                
+
             elif filter_by_user_type and not return_personal_use_users:
                 file_name = PROFESSIONAL_USERS_FILENAME
 
@@ -473,4 +480,3 @@ class DataCleaner:
             df.to_csv(output_path, index=False)
 
         return df
-
