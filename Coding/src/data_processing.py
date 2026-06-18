@@ -750,7 +750,7 @@ class DataProcessor():
                                    lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                                    sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
                                    first_period: int = FIRST_PERIOD_IN_DAYS,
-                                   second_period: int = SECOND_PERIOD_IN_DAYS) -> pl.DataFrame | None:
+                                   second_period: int = SECOND_PERIOD_IN_DAYS) -> pl.DataFrame:
         """
         Runs the full feature-engineering pipeline and returns the per-interval frame.
 
@@ -854,9 +854,108 @@ class DataProcessor():
                 .select(column_names_to_keep)
             )
             
-            print(d)
-            print(d.columns)
-            
+
             return d
+            
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
+            return pl.DataFrame()
+
+    
+    def prepare_data(self,
+                     load_path: Path,
+                     personal: bool = True,
+                     has_validation: bool = True,
+                     churn_adjusted_date_col_name: str | None = None,
+                     interval_in_days: int = INTERVAL_IN_DAYS,
+                     lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+                     sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
+                     first_period: int = FIRST_PERIOD_IN_DAYS,
+                     second_period: int = SECOND_PERIOD_IN_DAYS,
+                     save_path: Path | None = None
+                     ) -> tuple[pl.DataFrame, ...]:
+        """
+        Reads the split CSVs produced by the splitting step and runs feature
+        engineering on each split independently.
+ 
+        Each split is feature-engineered on its own: the interval grid and all
+        windowed aggregations are computed per user, so a user never crosses split
+        boundaries and no information passes between train, validation and test here.
+ 
+        Steps:
+            1. Read the train, (optional) validation and test CSVs for the segment.
+            2. Run apply_feature_engineering on each split.
+            3. (OPTIONAL) Save each feature-engineered split to save_path.
+ 
+        Args:
+            load_path:       Directory holding the split CSVs from the splitting step.
+            personal:        Selects the personal vs professional filename suffix.
+            has_validation:  Whether a validation split exists and should be processed.
+            interval_in_days, lookback_periods, sum_to_limit_in_days,
+            first_period, second_period: Passed through to apply_feature_engineering.
+            save_path:       Directory to write the feature-engineered CSVs. If None,
+                             nothing is saved.
+ 
+        Returns:
+            (train_features, val_features, test_features) if has_validation, else
+            (train_features, test_features).
+        """
+ 
+        churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
+ 
+        user_group = "personal" if personal else "professional"
+ 
+        # Filenames mirror those written by the splitting step's prepare_dataset
+        train_path = load_path / ("training_data_" + user_group + ".csv")
+        validation_path = load_path / ("validation_data_" + user_group + ".csv")
+        test_path = load_path / ("testing_data_" + user_group + ".csv")
+ 
+        if save_path:
+            save_path.mkdir(parents=True, exist_ok=True)
+            train_save_path = save_path / ("training_features_" + user_group + ".csv")
+            validation_save_path = save_path / ("validation_features_" + user_group + ".csv")
+            test_save_path = save_path / ("testing_features_" + user_group + ".csv")
+ 
+        train_df = pl.read_csv(train_path)
+        train_features = self.apply_feature_engineering(
+            train_df,
+            churn_adjusted_date_col_name,
+            interval_in_days,
+            lookback_periods,
+            sum_to_limit_in_days,
+            first_period,
+            second_period)
+ 
+        test_df = pl.read_csv(test_path)
+        test_features = self.apply_feature_engineering(
+            test_df,
+            churn_adjusted_date_col_name,
+            interval_in_days,
+            lookback_periods,
+            sum_to_limit_in_days,
+            first_period,
+            second_period)
+ 
+        if has_validation:
+            val_df = pl.read_csv(validation_path)
+            val_features = self.apply_feature_engineering(
+                val_df,
+                churn_adjusted_date_col_name,
+                interval_in_days,
+                lookback_periods,
+                sum_to_limit_in_days,
+                first_period,
+                second_period)
+ 
+            if save_path:
+                train_features.write_csv(train_save_path)
+                val_features.write_csv(validation_save_path)
+                test_features.write_csv(test_save_path)
+ 
+            return train_features, val_features, test_features
+ 
+        if save_path:
+            train_features.write_csv(train_save_path)
+            test_features.write_csv(test_save_path)
+ 
+        return train_features, test_features
