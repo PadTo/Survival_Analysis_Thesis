@@ -707,7 +707,7 @@ class DataProcessor():
         post_agg_3 += [(pl.col(recent_window_action_col).cast(pl.Int32) - pl.col(prior_window_action_col).cast(pl.Int32)).alias(action_intensity_drift_col)]
 
 
-        post_agg_2 += [(pl.col(INTERVAL_END_COL) - pl.col(LAST_ACTIVITY_DATE_COL)).alias(RECENCY_COL)]
+        post_agg_2 += [(pl.col(INTERVAL_END_COL) - pl.col(LAST_ACTIVITY_DATE_COL)).dt.total_days().alias(RECENCY_COL)]
 
 
         column_names_to_keep += [
