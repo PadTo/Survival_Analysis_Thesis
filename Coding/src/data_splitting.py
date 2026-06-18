@@ -4,7 +4,6 @@ import polars as pl
 from pathlib import Path
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.preprocessing import OrdinalEncoder
-from sklearn.preprocessing import LabelEncoder
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import train_test_split
 from .constants.columns import (
@@ -89,58 +88,53 @@ class DataSplitter():
         else:
             ordinal_enc = ordinal_enc_fitted
 
-        try:
-            # Deduplicating to one row per vehicle so KNN fits on distinct vehicles only
-            vehicle_df = (df
-                .select([VEHICLE_ID_COL, VEHICLE_MAKE_COL,
-                         VEHICLE_MILEAGE_COL, VEHICLE_START_YEAR_COL])
-                .unique(subset=[VEHICLE_ID_COL])
-                .to_pandas())
+        # Deduplicating to one row per vehicle so KNN fits on distinct vehicles only
+        vehicle_df = (df
+            .select([VEHICLE_ID_COL, VEHICLE_MAKE_COL,
+                     VEHICLE_MILEAGE_COL, VEHICLE_START_YEAR_COL])
+            .unique(subset=[VEHICLE_ID_COL])
+            .to_pandas())
 
-            if one_hot_enc_fitted is None:
-                vehicle_make_one_hot = one_hot_enc.fit_transform(vehicle_df[[VEHICLE_MAKE_COL]])
-            else:
-                vehicle_make_one_hot = one_hot_enc.transform(vehicle_df[[VEHICLE_MAKE_COL]])
+        if one_hot_enc_fitted is None:
+            vehicle_make_one_hot = one_hot_enc.fit_transform(vehicle_df[[VEHICLE_MAKE_COL]])
+        else:
+            vehicle_make_one_hot = one_hot_enc.transform(vehicle_df[[VEHICLE_MAKE_COL]])
 
-            if ordinal_enc_fitted is None:
-                vehicle_mileage_label = ordinal_enc.fit_transform(vehicle_df[[VEHICLE_MILEAGE_COL]])
-            else:
-                vehicle_mileage_label = ordinal_enc.transform(vehicle_df[[VEHICLE_MILEAGE_COL]])
+        if ordinal_enc_fitted is None:
+            vehicle_mileage_label = ordinal_enc.fit_transform(vehicle_df[[VEHICLE_MILEAGE_COL]])
+        else:
+            vehicle_mileage_label = ordinal_enc.transform(vehicle_df[[VEHICLE_MILEAGE_COL]])
 
-            imputed_df = pd.DataFrame(
-                vehicle_make_one_hot,
-                columns=one_hot_enc.get_feature_names_out(),
-                index=vehicle_df.index
-            )
-            
-            imputed_df["vehicle_mileage_cat"] = vehicle_mileage_label[:, 0]
-            # Start year placed last so the imputed target is recoverable as the final column
-            imputed_df[VEHICLE_START_YEAR_COL] = vehicle_df[VEHICLE_START_YEAR_COL].values
+        imputed_df = pd.DataFrame(
+            vehicle_make_one_hot,
+            columns=one_hot_enc.get_feature_names_out(),
+            index=vehicle_df.index
+        )
 
-            if KNN_imputer_fitted is not None:
-                X_imputed = KNN_imputer.transform(imputed_df)
-            else:
-                X_imputed = KNN_imputer.fit_transform(imputed_df)
+        imputed_df["vehicle_mileage_cat"] = vehicle_mileage_label[:, 0]
+        # Start year placed last so the imputed target is recoverable as the final column
+        imputed_df[VEHICLE_START_YEAR_COL] = vehicle_df[VEHICLE_START_YEAR_COL].values
 
-            vehicle_df[VEHICLE_START_YEAR_COL] = X_imputed[:, -1]
+        if KNN_imputer_fitted is not None:
+            X_imputed = KNN_imputer.transform(imputed_df)
+        else:
+            X_imputed = KNN_imputer.fit_transform(imputed_df)
 
-            imputed_col = f"{VEHICLE_START_YEAR_COL}_imputed"
-            lookup = pl.DataFrame({
-                VEHICLE_ID_COL: vehicle_df[VEHICLE_ID_COL],
-                imputed_col: vehicle_df[VEHICLE_START_YEAR_COL]
-            })
+        vehicle_df[VEHICLE_START_YEAR_COL] = X_imputed[:, -1]
 
-            # Mapping imputed values back to every activity row via vehicle_id
-            df = (df
-                .join(lookup, on=VEHICLE_ID_COL, how="left")
-                .with_columns(pl.col(imputed_col).alias(VEHICLE_START_YEAR_COL))
-                .drop(imputed_col))
+        imputed_col = f"{VEHICLE_START_YEAR_COL}_imputed"
+        lookup = pl.DataFrame({
+            VEHICLE_ID_COL: vehicle_df[VEHICLE_ID_COL],
+            imputed_col: vehicle_df[VEHICLE_START_YEAR_COL]
+        })
 
-            return df, KNN_imputer, one_hot_enc, ordinal_enc
+        # Mapping imputed values back to every activity row via vehicle_id
+        df = (df
+            .join(lookup, on=VEHICLE_ID_COL, how="left")
+            .with_columns(pl.col(imputed_col).alias(VEHICLE_START_YEAR_COL))
+            .drop(imputed_col))
 
-        except Exception as e:
-            print(f"Unexpected error has occurred: {e}")
-            return df, KNN_imputer, one_hot_enc, ordinal_enc
+        return df, KNN_imputer, one_hot_enc, ordinal_enc
 
     def split_train_val_test(self,
                              df: pl.DataFrame,
@@ -167,8 +161,7 @@ class DataSplitter():
         Returns:
             (train_data, val_data, test_data) if val_size is set, else (train_data, test_data).
         """
-        if val_size == None:
-            val_size_value = 0
+        val_size_value = val_size if val_size is not None else 0
 
         if not math.isclose(train_size + test_size + val_size_value, 1.0):
             raise ValueError(f"Splits must sum to 1, got {train_size + test_size + val_size_value}")
@@ -235,7 +228,7 @@ class DataSplitter():
         """
         Steps:
             1. Splits the dataset into train, val, and test if val_size is set, otherwise train and test
-            2. Imputes missing vehicle start_years using KNN imputer based via label and one hot encoders on mileage and make columns, respectively
+            2. Imputes missing vehicle start_years using KNN imputer via ordinal and one hot encoders on mileage and make columns, respectively
             3. (OPTIONAL) Save the dataset into the specificed location
 
         Args:
