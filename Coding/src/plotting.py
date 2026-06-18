@@ -618,15 +618,3 @@ class PlottingData:
             print(f"Unexpected error {e}")
             raise e
 
-
-data    = pl.read_csv(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\interim\personal_users_raw.csv")
-data_pf = pl.read_csv(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\interim\professional_users_raw.csv")
-
-data_plotter = PlottingData()
-# data_plotter.return_user_split_plot(data)
-# data_plotter.return_activity_distribution_plot(data)
-data_plotter.return_seasonality_plot(data)
-# data_plotter.return_vehicle_make_distribution_plot(data)
-# data_plotter.return_user_split_plot(data_pf, personal=False)
-
-plot.show()
