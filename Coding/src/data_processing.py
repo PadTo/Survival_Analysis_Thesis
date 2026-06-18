@@ -945,12 +945,16 @@ class DataProcessor():
                 self._generate_app_column_features_aggregation(
                     lookback_periods,
                     interval_in_days,
-                    sum_to_limit_in_days
+                    sum_to_limit_in_days,
+                    first_period,
+                    second_period
                     )
             agg_b, post_agg_1_b, post_agg_2_b, post_agg_3_b, column_names_to_keep_b  = \
                 self._generate_behaviour_features_aggregation(
                     lookback_periods,
-                    interval_in_days)
+                    interval_in_days,
+                    first_period,
+                    second_period)
 
 
             agg_vehicle, post_agg_1_vehicle, post_agg_2_vehicle,post_agg_3_vehicle, column_names_to_keep_vehicle = \
@@ -959,7 +963,11 @@ class DataProcessor():
                     interval_in_days)
             
             agg_churn, post_agg_1_churn, column_names_to_keep_churn = \
-                self._generate_churn_triggered_features_agg()
+                self._generate_churn_triggered_features_agg(
+                    lookback_periods,
+                    interval_in_days,
+                    first_period,
+                    second_period)
 
 
             agg += agg_af + agg_app + agg_b + agg_vehicle + agg_churn
@@ -1000,7 +1008,7 @@ class DataProcessor():
             print(f"Unexpected error has occurred: {e}")
 
     def split_data_and_process(self) -> None:
-        pass
+        
 
 
 
