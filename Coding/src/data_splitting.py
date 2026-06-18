@@ -109,7 +109,7 @@ class DataSplitter():
             vehicle_make_one_hot,
             columns=one_hot_enc.get_feature_names_out(),
             index=vehicle_df.index
-        )
+        ) # type: ignore
 
         imputed_df["vehicle_mileage_cat"] = vehicle_mileage_label[:, 0]
         # Start year placed last so the imputed target is recoverable as the final column
@@ -170,7 +170,7 @@ class DataSplitter():
 
         # Binning rare first-activity years so stratification has enough members per class
         user_years = (df
-            .with_columns(pl.col(ACTIVITY_DATE_COL).cast(pl.Date))
+            .with_columns(pl.col(ACTIVITY_DATE_COL).str.to_datetime(time_unit="us",time_zone="UTC").dt.date())
             .group_by(USER_ID_COL)
             .agg(pl.col(ACTIVITY_DATE_COL).min().dt.year().alias(first_year_col))
             .with_columns(
@@ -181,6 +181,7 @@ class DataSplitter():
             )
         )
 
+        user_years = user_years.sort(USER_ID_COL)
         user_years_pd = user_years.to_pandas()
 
         user_train_labels, user_test_labels, _, _ = train_test_split(
@@ -286,3 +287,20 @@ class DataSplitter():
                 test_df_imputed.write_csv(testing_data_path)
 
             return train_df_imputed, test_df_imputed
+        
+
+
+# import src.constants.paths_to_files_and_folders as paths
+
+# path_to_personal = paths.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+# data = pl.read_csv(path_to_personal)
+
+
+# data_splitter = DataSplitter(data)
+
+# data_splitter.prepare_dataset(data,
+#                               train_size=0.8,
+#                               test_size=0.1,
+#                               val_size=0.1,
+#                               personal=True,
+#                               save_path=Path(paths.PATH_TO_INTERIM_DATA))
