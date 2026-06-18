@@ -602,14 +602,11 @@ class PlottingData:
             if ax is None:
                 _, ax = plot.subplots()
 
-            if personal == None:
-                legend_label = "All users"
-            else:
-                legend_label = "Personal" if personal else "Professional"
 
             plot_color = self._segment_colour(personal)
 
-            sns.barplot(data=pandas_df, x=VEHICLE_MAKE_COL, y="count", ax=ax, color=plot_color,legend=legend_label)
+
+            sns.barplot(data=pandas_df, x=VEHICLE_MAKE_COL, y="count", ax=ax, color=plot_color)
 
             self._apply_bar_gradient(ax, plot_color)
             self._annotate_bar_values(ax, pandas_df["count"], total)
