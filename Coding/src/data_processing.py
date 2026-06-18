@@ -157,6 +157,8 @@ class DataProcessor():
             ).alias(INTERVAL_START_COL)
         ).explode(INTERVAL_START_COL).select([USER_ID_COL, INTERVAL_START_COL])
 
+
+
         # Backward asof: each activity attaches to the most recent interval start at or before its date
         df_with_intervals = df.join_asof(
             intervals,
@@ -736,7 +738,8 @@ class DataProcessor():
         post_agg_1 += [pl.col(CHURN_TRIGGERED_COL)
                        # Even though churn is triggered in the last period, the feature values
                        # must be taken from the previous period (shifting for correct assignment)
-                       .shift(-1)
+                       .shift(-1) # Depends on the prior sort, won't work if the dataset isn't correctly sorted
+                       .over(USER_ID_COL)
                        .fill_null(False) # This does not matter as much because the last row will be removed either way (incomplete intervals)
                        .alias(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)]
         
@@ -782,6 +785,7 @@ class DataProcessor():
                 .over([USER_ID_COL, ACTIVITY_DATE_COL])
                 .alias(FIRST_DISTINCT_COLUMN_NAME)
             )
+
 
             agg: list = []
             post_agg_1: list = []
@@ -851,9 +855,21 @@ class DataProcessor():
                 .with_columns(post_agg_2)
                 .with_columns(post_agg_3)
                 .with_columns(post_agg_4)
+            )
+
+            
+            # Drop each user's final interval: it is incomplete (no full interval of activity
+            # observed) and its real churn label has already been shifted back onto the prior row
+
+            d = (d
+                .with_columns(
+                    (pl.col(INTERVAL_START_COL) == pl.col(INTERVAL_START_COL).max().over(USER_ID_COL))
+                    .alias("_is_last_interval")
+                )
+                .filter(~pl.col("_is_last_interval"))
+                .drop("_is_last_interval")
                 .select(column_names_to_keep)
             )
-            
 
             return d
             
@@ -959,3 +975,14 @@ class DataProcessor():
             test_features.write_csv(test_save_path)
  
         return train_features, test_features
+    
+
+
+# from src.constants import paths_to_files_and_folders as const
+
+# path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+# data_ = pl.read_csv(path_to_personal_filtered)
+
+# dp = DataProcessor(data_)
+
+# a = dp.apply_feature_engineering(data_)
