@@ -1,4 +1,6 @@
 IN_FIGURE_TEXT_SIZE_MULTIPLIER: float = 0.8
+SCATTER_PLOT_SIZE_RANGE = (5,100)
+
 
 PALETTE = {
     "Professional": "#2C6E8F",  # blue
