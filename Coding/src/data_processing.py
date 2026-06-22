@@ -894,7 +894,9 @@ class DataProcessor():
                 .select(column_names_to_keep)
             )
 
-
+            # Just for better readability when examining the data
+            initial_column_ordering = [USER_ID_COL, INTERVAL_START_COL, INTERVAL_END_COL]
+            df = df.select(initial_column_ordering + [c for c in df.columns if c not in initial_column_ordering])
            
 
             return df
