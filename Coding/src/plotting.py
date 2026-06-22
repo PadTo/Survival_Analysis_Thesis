@@ -16,6 +16,7 @@ from .constants.columns import (
 )
 from .constants.thesis_plotting_style import IN_FIGURE_TEXT_SIZE_MULTIPLIER
 from .constants.cleaning import DEFAULT_CAR_SHARE_ABS, BURST_TIME_HR
+from src.constants.processor import CHURN_TRIGGERED_SHIFTED_COLUMN_NAME, INTERVAL_END_COL
 
 # ============================================================
 #  Fixed (non-templated) generated column names
@@ -618,3 +619,54 @@ class PlottingData:
             print(f"Unexpected error {e}")
             raise e
 
+    # ------------------------------------------------------------
+    #  Tie count distribution
+    # ------------------------------------------------------------
+    def return_interval_ties_summary(self,
+                                    df: pl.DataFrame,
+                                    ax: Axes | None = None,
+                                    personal: bool | None = None):
+        try:
+            df = df.filter(pl.col(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME))
+            df = df.group_by([INTERVAL_START_COL, INTERVAL_END_COL]).agg(
+                pl.col(USER_ID_COL).count().alias("ties")
+            ).sort([INTERVAL_START_COL, INTERVAL_END_COL])
+            df = df.filter(pl.col("ties") > 1)
+
+            # Count how many intervals have each tie size
+            tie_counts = (df
+                .group_by("ties")
+                .agg(pl.len().alias("count"))
+                .sort("ties")
+                
+            )
+
+            pandas_df = tie_counts.to_pandas()
+            if ax is None:
+                _, ax = plot.subplots()
+
+            plot_color = self._segment_colour(personal)
+
+            sns.barplot(data=tie_counts, x="ties", y="count", ax=ax, color=plot_color, edgecolor=COLORS["text"], linewidth=0.8)
+            
+           
+            self._annotate_bar_values(ax,pandas_df["count"],pandas_df["count"].sum())
+            self._style_categorical_axis(ax, "Number of Intervals", "Tie Count", pandas_df["count"].max())
+   
+
+            return ax
+
+        except Exception as e:
+            print(f"Unexpected error {e}")
+            raise e
+
+# from src.constants import paths_to_files_and_folders as const
+# test_features_personal = const.PATH_TO_FINAL_DATA / "testing_features_personal.csv"
+# personal_test = pl.read_csv(test_features_personal)
+
+# dp = PlottingData()
+
+# dp.return_interval_ties_summary(personal_test,
+#                                 personal=True)
+# plot.tight_layout()
+# plot.show()
