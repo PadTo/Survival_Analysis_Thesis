@@ -1,6 +1,7 @@
 import datetime
 from pathlib import Path
 import pandas as pd
+from colorama import Fore
 from .constants import paths_to_files_and_folders
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
@@ -444,6 +445,14 @@ class DataCleaner:
             print()
         
         if filter_early_churners:
+            
+            if not filter_inactivity:
+                print(Fore.RED + "WARNING! (Filter Early Churners)")
+                print("filter_early_churners functions by taking the min and max difference between usage dates to get the delta.",
+                      "Recommended to use filter_inactivity=True", sep="\n")
+                print(Fore.WHITE + "")
+                
+
             step = self.__step_counter(step)
 
             row_count_before = len(df)
@@ -485,3 +494,38 @@ class DataCleaner:
             df.to_csv(output_path, index=False)
 
         return df
+    
+
+
+# from src.constants import paths_to_files_and_folders as const
+# from src.constants.segments import PERSONAL, PROFESSIONAL
+# from src.constants.cleaning import DEFAULT_HHI_THRESHOLD, DEFAULT_CAR_SHARE_ABS, DEFAULT_CAR_SHARE_FRACTION
+# activity_df = pd.read_csv(const.PATH_TO_RAW_ACTIVITY_DATA_1000)
+# vehicle_df  = pd.read_csv(const.PATH_TO_RAW_VEHICLE_DATA_1000)
+# data_cleaner = DataCleaner(activity_df, vehicle_df)
+
+# # Decided churn threshold (see interval / gap analysis in notebook 01)
+# CHURN_THRESHOLD_DAYS_PERSONAL = PERSONAL.churn_threshold_days
+# CHURN_THRESHOLD_DAYS_PROFESSIONAL = PROFESSIONAL.churn_threshold_days
+
+# # Shared split criteria
+# HHI_THRESHOLD       = DEFAULT_HHI_THRESHOLD
+# CAR_SHARE_ABS       = DEFAULT_CAR_SHARE_ABS
+# CAR_SHARE_FRACTION  = DEFAULT_CAR_SHARE_FRACTION
+
+# personal_filtered = data_cleaner.get_clean_data(
+#     merge_data_frames=True,
+#     filter_inactivity=True,
+#     filter_nan_cols=None,
+#     filter_by_user_type=True,
+#     return_personal_use_users=True,          # personal
+#     filter_early_churners=True,
+#     filter_by_set_cutoff_date=True,
+#     transform_vehicle_end_year_to_present=True,
+#     filter_nan_vehicle_metadata=True,
+#     threshold_value=CHURN_THRESHOLD_DAYS_PERSONAL,
+#     inverse_hhi_threshold=HHI_THRESHOLD,
+#     car_share_threshold_abs=CAR_SHARE_ABS,
+#     car_share_threshold_fraction=CAR_SHARE_FRACTION,
+#     save_file_to=const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv",
+# )
