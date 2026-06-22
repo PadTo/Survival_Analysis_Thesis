@@ -7,3 +7,9 @@ SUM_TO_LIMIT_IN_DAYS: int = 56
 FIRST_PERIOD_IN_DAYS: int = 28
 SECOND_PERIOD_IN_DAYS: int = 56
 N_NEIGHBOURS: int = 5
+
+
+# ============================================================
+#  Columns used in multiple places
+# ============================================================
+INTERVAL_END_COL: str = "interval_end"
