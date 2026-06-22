@@ -873,16 +873,13 @@ class DataProcessor():
             d = (d
                 .with_columns(
                     (pl.col(INTERVAL_START_COL) == pl.col(INTERVAL_START_COL).max().over(USER_ID_COL))
-                    .alias("_is_last_interval"),
-                    (pl.col(INTERVAL_START_COL) == pl.col(INTERVAL_START_COL).min().over(USER_ID_COL))
-                    .alias("_is_first_interval"),
+                    .alias("_is_last_interval")
                 )
                 # Drop the incomplete final interval, EXCEPT when it is also the user's first
                 # interval and carries a churn label - those are the rescued first-interval
                 # churners whose label was deliberately kept rather than shifted away.
-                .filter(~pl.col("_is_last_interval") 
-                        | pl.col("_is_first_interval") & pl.col(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME))
-                .drop(["_is_last_interval","_is_first_interval"])
+                .filter(~pl.col("_is_last_interval"))
+                .drop(["_is_last_interval"])
                 .select(column_names_to_keep)
             )
 
@@ -993,12 +990,13 @@ class DataProcessor():
     
 
 
-from src.constants import paths_to_files_and_folders as const
+# from src.constants import paths_to_files_and_folders as const
 
-path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
-data_ = pl.read_csv(path_to_personal_filtered)
+# path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+# data_ = pl.read_csv(path_to_personal_filtered)
 
-dp = DataProcessor(data_)
+# dp = DataProcessor(data_)
 
-a = dp.apply_feature_engineering(data_)
+# a = dp.apply_feature_engineering(data_)
 
+# print(a.select(pl.col(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME).sum()))
