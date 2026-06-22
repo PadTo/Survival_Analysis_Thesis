@@ -886,9 +886,7 @@ class DataProcessor():
                     (pl.col(INTERVAL_START_COL) == pl.col(INTERVAL_START_COL).max().over(USER_ID_COL))
                     .alias("_is_last_interval")
                 )
-                # Drop the incomplete final interval, EXCEPT when it is also the user's first
-                # interval and carries a churn label - those are the rescued first-interval
-                # churners whose label was deliberately kept rather than shifted away.
+                # Drop the incomplete final interval
                 .filter(~pl.col("_is_last_interval"))
                 .drop(["_is_last_interval"])
                 .select(column_names_to_keep)
