@@ -740,20 +740,15 @@ class DataProcessor():
         # First-interval churners can survive the upstream span filter.
         # This keeps their label on the first interval instead of shifting it into a null.
         post_agg_1 += [
-            pl.when(
-                (pl.col(INTERVAL_START_COL).min().over(USER_ID_COL) == pl.col(INTERVAL_START_COL))
-                & (pl.col(CHURN_TRIGGERED_COL) == True))
-            .then(pl.col(CHURN_TRIGGERED_COL))
-            .otherwise(
-                    pl.col(CHURN_TRIGGERED_COL)
-                    # Even though churn is triggered in the last period, the feature values
-                    # must be taken from the previous period (shifting for correct assignment)
-                    .shift(-1) # Depends on the prior sort, won't work if the dataset isn't correctly sorted
-                    .over(USER_ID_COL)
-                    .fill_null(False)) # This does not matter as much because the last row will be removed either way (incomplete intervals)
+            pl.col(CHURN_TRIGGERED_COL)
+            # Even though churn is triggered in the last period, the feature values
+            # must be taken from the previous period (shifting for correct assignment)
+            .shift(-1) # Depends on the prior sort, won't work if the dataset isn't correctly sorted
+            .over(USER_ID_COL)
+            .fill_null(False) # This does not matter as much because the last row will be removed either way (incomplete intervals)
             .alias(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)]
 
-                 
+
         
         column_names_to_keep += [CHURN_TRIGGERED_SHIFTED_COLUMN_NAME]
         return agg, post_agg_1, column_names_to_keep
@@ -784,6 +779,8 @@ class DataProcessor():
                                                          churn_adjusted_date_col_name,
                                                          interval_in_days,
                                                          vehicle_make_column_names)
+
+         
 
             # Flagging the first occurrence of each distinct vehicle per user-day so the
             # mean-age / still-in-production aggregations count each vehicle once.
@@ -889,13 +886,13 @@ class DataProcessor():
                 .select(column_names_to_keep)
             )
 
+     
             return d
             
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
             return pl.DataFrame()
 
-    
     def prepare_data(self,
                      load_path: Path,
                      personal: bool = True,
@@ -1005,7 +1002,3 @@ dp = DataProcessor(data_)
 
 a = dp.apply_feature_engineering(data_)
 
-print(a)
-print(a[CHURN_TRIGGERED_SHIFTED_COLUMN_NAME].sum())
-# print(a[CHURN_TRIGGERED_SHIFTED_COLUMN_NAME].sum())
-# print(a.filter((pl.col(INTERVAL_START_COL).min() == pl.col(INTERVAL_START_COL)).over(USER_ID_COL)).select(pl.col(CHURN_TRIGGERED_COL)).sum())
