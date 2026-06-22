@@ -13,3 +13,4 @@ N_NEIGHBOURS: int = 5
 #  Columns used in multiple places
 # ============================================================
 INTERVAL_END_COL: str = "interval_end"
+CHURN_TRIGGERED_SHIFTED_COLUMN_NAME: str = "churn_triggered_adjusted"
