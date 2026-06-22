@@ -12,7 +12,7 @@ from .constants.columns import (
 )
 from .constants.processor import (
     LOOKBACK_PERIODS, INTERVAL_IN_DAYS, SUM_TO_LIMIT_IN_DAYS,
-    FIRST_PERIOD_IN_DAYS, SECOND_PERIOD_IN_DAYS)
+    FIRST_PERIOD_IN_DAYS, SECOND_PERIOD_IN_DAYS, INTERVAL_END_COL)
  
 
 # ============================================================
@@ -52,7 +52,6 @@ START_DATE_COL: str = "start_date"
 END_DATE_COL: str = "end_date"
 LAST_ACTIVITY_DATE_COL: str = "last_activity_date"
 RECENCY_COL: str = "recency"
-INTERVAL_END_COL: str = "interval_end"
 PROP_IN_PROD_COL: str = "prop_in_prod"
 CUMULATIVE_COUNT_TOTAL_COL: str = "cumulative_count_total"
 MEAN_AGE_INTERMEDIATE_COL: str = "vehicle_mean_age_intermediate"
@@ -753,6 +752,16 @@ class DataProcessor():
         column_names_to_keep += [CHURN_TRIGGERED_SHIFTED_COLUMN_NAME]
         return agg, post_agg_1, column_names_to_keep
 
+    def _transform_intervals_to_start_stop(self):
+        
+        post_agg_1: list = []
+        post_agg_2: list = []
+        
+        post_agg_1 = [(pl.col(INTERVAL_START_COL) - pl.col(INTERVAL_START_COL).min().over(USER_ID_COL)).dt.total_days().alias(INTERVAL_START_COL)]
+        post_agg_2 = [pl.col(INTERVAL_START_COL).shift(-1).over(USER_ID_COL).alias(INTERVAL_END_COL)]
+      
+        return post_agg_1, post_agg_2
+
     def apply_feature_engineering(self,
                                    df: pl.DataFrame,
                                    churn_adjusted_date_col_name: str | None = None,
@@ -836,6 +845,8 @@ class DataProcessor():
                     first_period,
                     second_period)
 
+            post_agg_1_start_stop, post_agg_2_start_stop = self._transform_intervals_to_start_stop()
+
          
             agg += agg_af + agg_app + agg_b + agg_vehicle + agg_churn
 
@@ -850,13 +861,13 @@ class DataProcessor():
             )
 
             
-            post_agg_1 += post_agg_1_af + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle + post_agg_1_churn
-            post_agg_2 += post_agg_2_af + post_agg_2_app + post_agg_2_b + post_agg_2_vehicle
+            post_agg_1 += post_agg_1_af + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle + post_agg_1_churn + post_agg_1_start_stop
+            post_agg_2 += post_agg_2_af + post_agg_2_app + post_agg_2_b + post_agg_2_vehicle + post_agg_2_start_stop
             post_agg_3 += post_agg_3_af + post_agg_3_app + post_agg_3_b + post_agg_3_vehicle
             post_agg_4 += post_agg_4_app
 
             # Sorting after agg: group_by does not preserve order, but post aggregation require chronological rows per user
-            d = (df_with_intervals
+            df = (df_with_intervals
                 .group_by(group_and_sort_by_columns)
                 .agg(agg)
                 .sort(group_and_sort_by_columns)
@@ -866,11 +877,11 @@ class DataProcessor():
                 .with_columns(post_agg_4)
             )
 
-
+        
             # Drop each user's final interval: it is incomplete (no full interval of activity
             # observed) and its real churn label has already been shifted back onto the prior row
 
-            d = (d
+            df = (df
                 .with_columns(
                     (pl.col(INTERVAL_START_COL) == pl.col(INTERVAL_START_COL).max().over(USER_ID_COL))
                     .alias("_is_last_interval")
@@ -883,8 +894,10 @@ class DataProcessor():
                 .select(column_names_to_keep)
             )
 
-     
-            return d
+
+           
+
+            return df
             
         except Exception as e:
             print(f"Unexpected error has occurred: {e}")
@@ -990,13 +1003,14 @@ class DataProcessor():
     
 
 
-# from src.constants import paths_to_files_and_folders as const
+from src.constants import paths_to_files_and_folders as const
 
-# path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
-# data_ = pl.read_csv(path_to_personal_filtered)
+path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+data_ = pl.read_csv(path_to_personal_filtered)
 
-# dp = DataProcessor(data_)
+dp = DataProcessor(data_)
 
-# a = dp.apply_feature_engineering(data_)
+a = dp.apply_feature_engineering(data_)
 
-# print(a.select(pl.col(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME).sum()))
+print(a)
+# print(a.select(pl.col(INTERVAL_END_COL).is_null().sum()))
