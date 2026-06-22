@@ -448,6 +448,7 @@ class DataCleaner:
             
             if not filter_inactivity:
                 print(Fore.RED + "WARNING! (Filter Early Churners)")
+                # Otherwise the users that are active, say, for 2 days inactive for another 500 days and active again wouldn't be classified as early churners
                 print("filter_early_churners functions by taking the min and max difference between usage dates to get the delta.",
                       "Recommended to use filter_inactivity=True", sep="\n")
                 print(Fore.WHITE + "")
