@@ -12,7 +12,8 @@ from .constants.columns import (
 )
 from .constants.processor import (
     LOOKBACK_PERIODS, INTERVAL_IN_DAYS, SUM_TO_LIMIT_IN_DAYS,
-    FIRST_PERIOD_IN_DAYS, SECOND_PERIOD_IN_DAYS, INTERVAL_END_COL)
+    FIRST_PERIOD_IN_DAYS, SECOND_PERIOD_IN_DAYS, INTERVAL_END_COL,
+    CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)
  
 
 # ============================================================
@@ -59,7 +60,6 @@ VEHICLE_AGE_COLUMN_NAME: str = "vehicle_age"
 VEHICLE_MEAN_AGE_COLUMN_NAME: str = "vehicle_mean_age_in_an_interval"
 VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME: str = "vehicle_mean_age_overall"
 FIRST_DISTINCT_COLUMN_NAME: str = "first_distinct"
-CHURN_TRIGGERED_SHIFTED_COLUMN_NAME: str = "churn_triggered_adjusted"
 
 class DataProcessor():
 
