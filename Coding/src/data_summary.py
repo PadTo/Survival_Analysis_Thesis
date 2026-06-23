@@ -28,9 +28,11 @@ INTERVAL_DAYS_COL          = "interval_days"
 
 class DataSummary:
 
+    # Currently unused
     def _filter_rows_from_burst(self,
                             df: pl.DataFrame,
                             burst_time_hr: float = BURST_TIME_HR) -> pl.DataFrame:
+        """Remove burst rows, then collapse to one row per distinct active day per user."""
         df = df.with_columns(
             pl.col(ACTIVITY_DATE_COL).str.to_datetime(time_unit="us", time_zone="UTC")
         )
@@ -51,7 +53,30 @@ class DataSummary:
             .alias("_is_not_burst")
         )
 
-        return df.filter(pl.col("_is_not_burst")).drop(["_shifted_date", "_is_not_burst"])
+        df = df.filter(pl.col("_is_not_burst")).drop(["_shifted_date", "_is_not_burst"])
+
+        # Collapse to one row per distinct active day per user
+        df = df.group_by(USER_ID_COL).agg(
+            pl.col(ACTIVITY_DATE_COL).dt.date().unique()
+        ).explode(ACTIVITY_DATE_COL)
+
+        return df
+
+    def _cast_activity_date_col_to_datetime(self,
+                                            df: pl.DataFrame,
+                                            as_date: bool = True):
+        """Parse the activity-date string; as_date drops the time when only the calendar day matters."""
+        expr = pl.col(ACTIVITY_DATE_COL).str.to_datetime(time_unit="us", time_zone="UTC")
+
+        if as_date:
+            expr = expr.dt.date()
+
+        return df.with_columns(expr)
+    
+    def _transform_df_to_single_day_activity(self, df: pl.DataFrame):
+        """Collapse to one row per distinct active day per user, so repeated same-day use isn't counted as multiple gaps."""
+        df = df.group_by(USER_ID_COL).agg(pl.col(ACTIVITY_DATE_COL).unique()).explode(ACTIVITY_DATE_COL)
+        return df
 
     def _build_interval_grid(self,
                              df: pl.DataFrame,
@@ -148,14 +173,16 @@ class DataSummary:
                                 df: pl.DataFrame,
                                 percentiles: list[float] | None = None) -> pd.DataFrame:
         """
-        Summarises the inter-activity gap distribution after burst filtering.
+        Summarises the inter-activity gap distribution.
 
-        Gaps <= burst_time_hr are removed before summarising since they represent
-        same-session repeated scans rather than distinct activity events.
+        Collapsed to one row per distinct active day per user before computing gaps,
+        so repeated same-day use is not counted as multiple gap events.
         """
         percentiles = percentiles or [0.25, 0.5, 0.75, 0.9, 0.95, 0.99]
-
-        df = self._filter_rows_from_burst(df)
+        
+        df = self._cast_activity_date_col_to_datetime(df)
+        df = self._transform_df_to_single_day_activity(df)
+        
         df = df.sort([USER_ID_COL, ACTIVITY_DATE_COL])
 
         df = df.with_columns(
@@ -167,8 +194,8 @@ class DataSummary:
 
         gaps = (
             df.with_columns(
-                ((pl.col(ACTIVITY_DATE_COL) - pl.col("_prev_date"))
-                .dt.total_seconds() / 86400)
+                (pl.col(ACTIVITY_DATE_COL) - pl.col("_prev_date"))
+                .dt.total_days()
                 .alias("gap_days")
             )
             .filter(pl.col("gap_days").is_not_null())
@@ -177,5 +204,4 @@ class DataSummary:
         )
 
         return gaps.describe(percentiles=percentiles).to_frame("gap_days")
-
- 
+        
