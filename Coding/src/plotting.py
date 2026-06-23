@@ -651,7 +651,7 @@ class PlottingData:
             
            
             self._annotate_bar_values(ax,pandas_df["count"],pandas_df["count"].sum())
-            self._style_categorical_axis(ax, "Number of Intervals", "Tie Count", pandas_df["count"].max())
+            self._style_categorical_axis(ax, "Number of people in a tie", "Frequency of such ties ", pandas_df["count"].max())
    
 
             return ax
@@ -661,7 +661,7 @@ class PlottingData:
             raise e
 
 # from src.constants import paths_to_files_and_folders as const
-# test_features_personal = const.PATH_TO_FINAL_DATA / "testing_features_personal.csv"
+# test_features_personal = const.PATH_TO_INTERIM_DATA / "personal_users_filtered_full_feature.csv"
 # personal_test = pl.read_csv(test_features_personal)
 
 # dp = PlottingData()
