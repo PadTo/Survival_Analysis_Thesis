@@ -362,7 +362,8 @@ class DataProcessor():
                 (pl.col(column_name) / pl.col(total_actions_col_name)).alias(prop_column_name).fill_nan(0),
             ]
 
-            column_names_to_keep += [prop_column_name]
+            if prop_column_name != "prop_other_0_56":
+                column_names_to_keep += [prop_column_name]
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
@@ -1004,13 +1005,14 @@ class DataProcessor():
     
 
 
-from src.constants import paths_to_files_and_folders as const
+# from src.constants import paths_to_files_and_folders as const
 
-path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
-data_ = pl.read_csv(path_to_personal_filtered)
+# path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+# data_ = pl.read_csv(path_to_personal_filtered)
 
-dp = DataProcessor(data_)
+# dp = DataProcessor(data_)
 
-a = dp.apply_feature_engineering(data_)
+# a = dp.apply_feature_engineering(data_)
 
-print(a.columns)
+# print(a.columns)
+# print(len(a.columns))
