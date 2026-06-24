@@ -480,8 +480,9 @@ class DataProcessor():
 
         column_names_to_keep += [
             OVERALL_PROP_COL_TEMPLATE.format(name=col.replace("cumulative_count_", ""))
-            for col in cum_count_col_names
+            for col in cum_count_col_names if col != "cumulative_count_vehicle_make_other_rare"
         ]
+  
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
@@ -1012,5 +1013,4 @@ dp = DataProcessor(data_)
 
 a = dp.apply_feature_engineering(data_)
 
-print(a)
-# print(a.select(pl.col(INTERVAL_END_COL).is_null().sum()))
+print(a.columns)
