@@ -724,11 +724,7 @@ class DataProcessor():
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
-    def _generate_churn_triggered_features_agg(self,
-                                            lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
-                                            interval_in_days: int = INTERVAL_IN_DAYS,
-                                            first_period: int = FIRST_PERIOD_IN_DAYS,
-                                            second_period: int = SECOND_PERIOD_IN_DAYS)-> tuple[list,...]:
+    def _generate_churn_triggered_features_agg(self)-> tuple[list,...]:
         
         agg: list = []
         post_agg_1: list = []
@@ -842,11 +838,7 @@ class DataProcessor():
                     interval_in_days)
             
             agg_churn, post_agg_1_churn, column_names_to_keep_churn = \
-                self._generate_churn_triggered_features_agg(
-                    lookback_periods,
-                    interval_in_days,
-                    first_period,
-                    second_period)
+                self._generate_churn_triggered_features_agg()
 
             post_agg_1_start_stop, post_agg_2_start_stop = self._transform_intervals_to_start_stop()
 
@@ -917,4 +909,4 @@ data_ = pl.read_csv(path_to_personal_filtered)
 
 dp = DataProcessor(data_)
 
-a = dp.apply_feature_engineering(data_,save_file_to=Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\final\features_personal.csv"))
+a = dp.apply_feature_engineering(data_,save_file_to=Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\final\features_personal_28_day_intervals.csv"))
