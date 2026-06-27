@@ -3,6 +3,7 @@ from pathlib import Path
 import polars as pl
 from datetime import timedelta
 from .constants.variables_groupings import activity_type_groups, app_type_groups, brand_group_map
+from .imputing import Imputer
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
     CHURN_TRIGGERED_COL, VEHICLE_ID_COL, VEHICLE_MAKE_COL,
@@ -65,6 +66,7 @@ class DataProcessor():
 
     def __init__(self, df: pd.DataFrame | pl.DataFrame) -> None:
         self.df = df.copy(deep=True) if type(df) == pd.DataFrame else df
+        
 
     def _prepare_df(self,
                     df: pl.DataFrame,
@@ -778,9 +780,14 @@ class DataProcessor():
         all expressions in a single .with_columns() against the pre-pass frame.
         """
 
+        imputer_object = Imputer(df)
         churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
 
         try:
+            # Accepting the mild leakge for imputing on the whole dataset (only 412 missing vehicle start year values)
+            df, _, _, _ = imputer_object.KNN_impute_vehicle_start_year(df)
+
+            
             group_and_sort_by_columns = [USER_ID_COL, INTERVAL_START_COL]
             df, vehicle_make_column_names = self._prepare_df(df, churn_adjusted_date_col_name)
             df_with_intervals = self._generate_intervals(df,
