@@ -45,6 +45,7 @@ ACTIONS_TOKEN: str = "actions"
 STILL_IN_PRODUCTION_TOKEN: str = "still_in_production"
 TOTAL_CARS_TOKEN: str = "total_cars"
 TOTAL_APP_TOKEN: str = "total_app"
+DATES_LIST_TOKEN = "dates_list"
 
 
 # ============================================================
@@ -61,6 +62,10 @@ VEHICLE_AGE_COLUMN_NAME: str = "vehicle_age"
 VEHICLE_MEAN_AGE_COLUMN_NAME: str = "vehicle_mean_age_in_an_interval"
 VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME: str = "vehicle_mean_age_overall"
 FIRST_DISTINCT_COLUMN_NAME: str = "first_distinct"
+ACTIVITY_FLAG_COLUMN_NAME: str = "active_flag"
+MEAN_GAP_COLUMN_NAME = "mean_gap"
+SD_GAP_COLUMN_NAME = "sd_gap"
+CV_GAP_COLUMN_NAME = "CV_gap"
 
 
 class DataProcessor():
@@ -223,7 +228,7 @@ class DataProcessor():
                               base_columns: dict[str, str],
                               lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
                               interval_in_days: int = INTERVAL_IN_DAYS,
-                              fill_value: int | None = None) -> tuple[list, dict[tuple[int, int], list[str]]]:
+                              fill_value: int | list | None = None) -> tuple[list, dict[tuple[int, int], list[str]]]:
         """
         Builds shift expressions and a window registry for a set of base columns.
 
@@ -621,6 +626,7 @@ class DataProcessor():
         post_agg_1: list = []
         post_agg_2: list = []
         post_agg_3: list = []
+        post_agg_4: list = []
         column_names_to_keep: list = []
 
 
@@ -725,14 +731,14 @@ class DataProcessor():
         actions_per_session_prior = ACTION_PER_SESSION_COL_TEMPLATE.format( start  = first_period, end=second_period)
         action_per_session_drift = INTENSITY_DRIFT_COL_TEMPLATE.format(a="actions_per_session", r0=0, r1=first_period, r2=second_period)
 
-        post_agg_2 += [(pl.col(recent_window_action_col) / pl.col(recent_window_session_col))
+        post_agg_3 += [(pl.col(recent_window_action_col) / pl.col(recent_window_session_col))
                        .fill_nan(0)
                        .alias(actions_per_session_recent),
                        (pl.col(prior_window_action_col) / pl.col(prior_window_session_col)).
                        fill_nan(0)
                        .alias(actions_per_session_prior)]
         
-        post_agg_3 +=[(pl.col(actions_per_session_recent) - pl.col(actions_per_session_prior)).alias(action_per_session_drift)]
+        post_agg_4 += [(pl.col(actions_per_session_recent) - pl.col(actions_per_session_prior)).alias(action_per_session_drift)]
 
         column_names_to_keep += [
             recent_window_session_col, # Volume
@@ -743,7 +749,7 @@ class DataProcessor():
             INTERVAL_END_COL]
 
 
-        return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
+        return agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, column_names_to_keep
 
     def _generate_churn_triggered_features_agg(self)-> tuple[list,...]:
         
@@ -771,6 +777,71 @@ class DataProcessor():
         column_names_to_keep += [CHURN_TRIGGERED_SHIFTED_COLUMN_NAME]
         return agg, post_agg_1, column_names_to_keep
 
+    def _generate_usage_gap_features_agg(self,
+                                    lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+                                    interval_in_days: int = INTERVAL_IN_DAYS,
+                                    first_period: int = FIRST_PERIOD_IN_DAYS,
+                                    second_period: int = SECOND_PERIOD_IN_DAYS) -> tuple[list, ...]:
+        agg: list = []
+        post_agg_1: list = []
+        post_agg_2: list = []
+        post_agg_3: list = []
+        post_agg_4: list = []
+        post_agg_5: list = [] 
+        column_names_to_keep: list = []
+
+        dates_list_base_col = COL_TEMPLATE_FORMAT.format(a=DATES_LIST_TOKEN, start=0, end=interval_in_days)
+        dates_list_entire_lookback = COL_TEMPLATE_FORMAT.format(a=DATES_LIST_TOKEN, start=0, end=second_period)
+
+        # Distinct sorted list of active days inside each interval, so multiple actions on one day count once
+        agg += [pl.col(ACTIVITY_DATE_COL).dt.date().unique().sort().alias(dates_list_base_col)]
+        post_agg_1 += [pl.col(dates_list_base_col).list.drop_nulls()]
+
+        dates_list_lags, list_date_lags_registry = self._build_lagged_columns(
+            {DATES_LIST_TOKEN: dates_list_base_col}, lookback_periods, interval_in_days, fill_value=[])
+
+        post_agg_2 += dates_list_lags
+        # Sorting after concat so gaps come out positive; concat_list preserves list order, not date order
+        post_agg_3 += [
+            pl.concat_list(col[0] for _, col in list_date_lags_registry.items())
+            .list.sort()
+            .alias(dates_list_entire_lookback)
+        ]
+
+        mean_gap_col = COL_TEMPLATE_FORMAT.format(a=MEAN_GAP_COLUMN_NAME, start=0, end=second_period)
+        sd_gap_col   = COL_TEMPLATE_FORMAT.format(a=SD_GAP_COLUMN_NAME,   start=0, end=second_period)
+        cv_gap_col   = COL_TEMPLATE_FORMAT.format(a=CV_GAP_COLUMN_NAME,   start=0, end=second_period).replace("n_","")
+
+        # Gaps between consecutive active days (in days); first element of diff is null and dropped
+        gaps_expr = (
+            pl.col(dates_list_entire_lookback)
+            .list.diff()
+            .list.drop_nulls()
+            .list.eval(pl.element().dt.total_days())
+        )
+
+        # Mean and std of the gap distribution over the lookback window
+        post_agg_4 += [gaps_expr.list.mean().alias(mean_gap_col)]
+        post_agg_4 += [gaps_expr.list.std().alias(sd_gap_col)]
+
+        # No-activity flag: <= 1 date in the window means no gap can be computed
+        post_agg_4 += [
+            (pl.col(dates_list_entire_lookback).list.len() > 1).alias(ACTIVITY_FLAG_COLUMN_NAME)
+        ]
+
+    
+        post_agg_5 += [
+            pl.when(pl.col(mean_gap_col) > 0)
+            .then(pl.col(sd_gap_col) / pl.col(mean_gap_col))
+            .otherwise(None)
+            .fill_null(0)
+            .alias(cv_gap_col)
+        ]
+        
+
+        column_names_to_keep += [ACTIVITY_FLAG_COLUMN_NAME, cv_gap_col]
+
+        return (agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, post_agg_5, column_names_to_keep)
 
     def _transform_intervals_to_start_stop(self):
         
@@ -823,19 +894,19 @@ class DataProcessor():
                 pl.col(VEHICLE_AGE_COLUMN_NAME)
                 .is_first_distinct()
 
-                # Not over CHURND_ADJUSTED_DATE, because usage is on ACTIVITY_DATE_COL
-                # Churn date is only used to generate intervals properly for the counting
-                # process in survival analysis
+                # Not over CHURND_ADJUSTED_DATE
                 .over([USER_ID_COL, ACTIVITY_DATE_COL])
                 .alias(FIRST_DISTINCT_COLUMN_NAME)
             )
 
-          
+        
+        
             agg: list = []
             post_agg_1: list = []
             post_agg_2: list = []
             post_agg_3: list = []
             post_agg_4: list = []
+            post_agg_5: list = []
             column_names_to_keep: list = []
 
             agg_af, post_agg_1_af, post_agg_2_af, post_agg_3_af, column_names_to_keep_af = \
@@ -851,7 +922,7 @@ class DataProcessor():
                     first_period,
                     second_period
                     )
-            agg_b, post_agg_1_b, post_agg_2_b, post_agg_3_b, column_names_to_keep_b  = \
+            agg_b, post_agg_1_b, post_agg_2_b, post_agg_3_b,  post_agg_4_b, column_names_to_keep_b  = \
                 self._generate_behaviour_features_aggregation(
                     lookback_periods,
                     interval_in_days,
@@ -869,24 +940,29 @@ class DataProcessor():
 
             post_agg_1_start_stop, post_agg_2_start_stop = self._transform_intervals_to_start_stop()
 
+            agg_gap, post_agg_1_gap, post_agg_2_gap, post_agg_3_gap, post_agg_4_gap, post_agg_5_gap, column_names_to_keep_gap = self._generate_usage_gap_features_agg()
          
-            agg += agg_af + agg_app + agg_b + agg_vehicle + agg_churn
-
-    
+            
             column_names_to_keep += [USER_ID_COL, INTERVAL_START_COL]
             column_names_to_keep += (
                 column_names_to_keep_af +
                 column_names_to_keep_app +
                 column_names_to_keep_b +
                 column_names_to_keep_vehicle +
-                column_names_to_keep_churn
+                column_names_to_keep_churn +
+                column_names_to_keep_gap
             )
 
+
+
+            agg += agg_af + agg_app + agg_b + agg_vehicle + agg_churn + agg_gap
+            post_agg_1 += post_agg_1_af  + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle + post_agg_1_churn + post_agg_1_start_stop + post_agg_1_gap
+            post_agg_2 += post_agg_2_af  + post_agg_2_app + post_agg_2_b + post_agg_2_vehicle + post_agg_2_start_stop + post_agg_2_gap
+            post_agg_3 += post_agg_3_af  + post_agg_3_app + post_agg_3_b + post_agg_3_vehicle + post_agg_3_gap
+            post_agg_4 += post_agg_4_app + post_agg_4_gap + post_agg_4_b
+            post_agg_5 += post_agg_5_gap
             
-            post_agg_1 += post_agg_1_af + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle + post_agg_1_churn + post_agg_1_start_stop
-            post_agg_2 += post_agg_2_af + post_agg_2_app + post_agg_2_b + post_agg_2_vehicle + post_agg_2_start_stop
-            post_agg_3 += post_agg_3_af + post_agg_3_app + post_agg_3_b + post_agg_3_vehicle
-            post_agg_4 += post_agg_4_app
+       
 
             # Sorting after agg: group_by does not preserve order, but post aggregation require chronological rows per user
             df = (df_with_intervals
@@ -897,9 +973,10 @@ class DataProcessor():
                 .with_columns(post_agg_2)
                 .with_columns(post_agg_3)
                 .with_columns(post_agg_4)
+                .with_columns(post_agg_5)
             )
 
-        
+
             # Drop each user's final interval: it is incomplete (no full interval of activity
             # observed) and its real churn label has already been shifted back onto the prior row
 
@@ -913,7 +990,7 @@ class DataProcessor():
                 .drop(["_is_last_interval"])
                 .select(column_names_to_keep)
             )
-
+            print(df)
             # Just for better readability when examining the data
             initial_column_ordering = [USER_ID_COL, INTERVAL_START_COL, INTERVAL_END_COL]
             df = df.select(initial_column_ordering + [c for c in df.columns if c not in initial_column_ordering])
@@ -929,14 +1006,13 @@ class DataProcessor():
 
 
 
-# from src.constants import paths_to_files_and_folders as const
+from src.constants import paths_to_files_and_folders as const
 
-# path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
-# data_ = pl.read_csv(path_to_personal_filtered)
+path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+data_ = pl.read_csv(path_to_personal_filtered)
 
-# dp = DataProcessor(data_)
+dp = DataProcessor(data_)
 
+d = dp.apply_feature_engineering(data_)
 
-# # print(data_["churn_triggered"].sum())
-# data_prepared, _ = dp._prepare_df(data_)
-# dp._generate_intervals(data_prepared)
+print(d.columns)
