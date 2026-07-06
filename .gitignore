@@ -11,3 +11,5 @@ Coding/notebooks/test.ipynb
 
 __pycache__/
 *.pyc
+
+*.Rprofile
