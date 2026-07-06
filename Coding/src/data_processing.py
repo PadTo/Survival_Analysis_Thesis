@@ -8,7 +8,7 @@ from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
     CHURN_TRIGGERED_COL, VEHICLE_ID_COL, VEHICLE_MAKE_COL,
     VEHICLE_MODEL_COL, VEHICLE_START_YEAR_COL, VEHICLE_END_YEAR_COL,
-    VEHICLE_MILEAGE_COL, APP_COL, ACTIVITY_TYPE_COL,
+    VEHICLE_MILEAGE_COL, APP_COL, ACTIVITY_TYPE_COL, ACTIVITY_DATE_COL,
     STILL_IN_PRODUCTION_COL, INTERVAL_START_COL
 )
 from .constants.processor import (
@@ -35,7 +35,7 @@ OVERALL_PROP_COL_TEMPLATE: str = "overall_prop_{name}"
 CUMULATIVE_COUNT_COL_TEMPLATE: str = "cumulative_count_{name}"
 DRIFT_COL_TEMPLATE: str = "prop_{a}_drift_{r0}_{r1}_vs_{r1}_{r2}"
 INTENSITY_DRIFT_COL_TEMPLATE: str = "{a}_intensity_drift_{r0}_{r1}_vs_{r1}_{r2}_days"
-
+ACTION_PER_SESSION_COL_TEMPLATE: str = "actions_per_session_{start}_{end}_days"
 
 # ============================================================
 #  Aggregation tokens (the {a}/{name} filled into the templates)
@@ -61,6 +61,7 @@ VEHICLE_AGE_COLUMN_NAME: str = "vehicle_age"
 VEHICLE_MEAN_AGE_COLUMN_NAME: str = "vehicle_mean_age_in_an_interval"
 VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME: str = "vehicle_mean_age_overall"
 FIRST_DISTINCT_COLUMN_NAME: str = "first_distinct"
+
 
 class DataProcessor():
 
@@ -131,7 +132,7 @@ class DataProcessor():
 
     def _generate_intervals(self,
                             df: pl.DataFrame,
-                            churn_adjusted_date_col_name: str | None = None,
+                            activity_date_col_name: str | None = None,
                             interval: int = INTERVAL_IN_DAYS,
                             vehicle_make_column_names: list | None = None) -> pl.DataFrame:
         """
@@ -143,11 +144,11 @@ class DataProcessor():
         because an empty interval (no usage) is itself the signal of interest.
         """
 
-        churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
+        activity_date_col_name = activity_date_col_name or ACTIVITY_DATE_COL
 
         user_min_max_dates = df.group_by(USER_ID_COL).agg(
-            pl.col(churn_adjusted_date_col_name).min().alias(START_DATE_COL),
-            pl.col(churn_adjusted_date_col_name).max().alias(END_DATE_COL)
+            pl.col(activity_date_col_name).min().alias(START_DATE_COL),
+            pl.col(activity_date_col_name).max().alias(END_DATE_COL)
         )
 
         intervals = user_min_max_dates.with_columns(
@@ -159,15 +160,19 @@ class DataProcessor():
         ).explode(INTERVAL_START_COL).select([USER_ID_COL, INTERVAL_START_COL])
 
 
+      
+
 
         # Backward asof: each activity attaches to the most recent interval start at or before its date
         df_with_intervals = df.join_asof(
             intervals,
-            left_on=churn_adjusted_date_col_name,
+            left_on=activity_date_col_name,
             right_on=INTERVAL_START_COL,
             by=USER_ID_COL,
             strategy="backward"
         )
+
+
 
         # Re-joining from the full interval grid reintroduces intervals that had zero activity
         df_with_intervals = intervals.join(
@@ -178,7 +183,7 @@ class DataProcessor():
 
         df_with_intervals = self._fill_null_values(df_with_intervals,
                                                    vehicle_make_column_names)
-
+        
         return df_with_intervals
 
     def _fill_null_values(self,
@@ -437,6 +442,7 @@ class DataProcessor():
                 .count()
                 .alias(total_car_count)]
 
+        
         post_agg_1 += [(pl.col(still_in_prod_count).cum_sum().over(USER_ID_COL) /
                         pl.col(total_car_count).cum_sum().over(USER_ID_COL))
                         .fill_nan(0)
@@ -448,7 +454,7 @@ class DataProcessor():
 
         ##___MAKE PROPORTIONS___##
         for vehicle_make_col_name in vehicle_make_col_names:
-
+            
             n_count_col_name = COL_TEMPLATE_FORMAT.format(
                                                 a=vehicle_make_col_name,
                                                 start=0,
@@ -714,12 +720,25 @@ class DataProcessor():
 
         post_agg_2 += [(pl.col(INTERVAL_END_COL) - pl.col(LAST_ACTIVITY_DATE_COL)).dt.total_days().alias(RECENCY_COL)]
 
+        # Actions per session  (depth) to decouple colinearity between session and action counts
+        actions_per_session_recent = ACTION_PER_SESSION_COL_TEMPLATE.format(start  = 0,            end=first_period)
+        actions_per_session_prior = ACTION_PER_SESSION_COL_TEMPLATE.format( start  = first_period, end=second_period)
+        action_per_session_drift = INTENSITY_DRIFT_COL_TEMPLATE.format(a="actions_per_session", r0=0, r1=first_period, r2=second_period)
+
+        post_agg_2 += [(pl.col(recent_window_action_col) / pl.col(recent_window_session_col))
+                       .fill_nan(0)
+                       .alias(actions_per_session_recent),
+                       (pl.col(prior_window_action_col) / pl.col(prior_window_session_col)).
+                       fill_nan(0)
+                       .alias(actions_per_session_prior)]
+        
+        post_agg_3 +=[(pl.col(actions_per_session_recent) - pl.col(actions_per_session_prior)).alias(action_per_session_drift)]
 
         column_names_to_keep += [
-            recent_window_session_col,
-            session_intensity_drift_col,
-            recent_window_action_col,
-            action_intensity_drift_col,
+            recent_window_session_col, # Volume
+            session_intensity_drift_col, # Volume drift
+            actions_per_session_recent, # Depth
+            action_per_session_drift, # Depth drift
             RECENCY_COL,
             INTERVAL_END_COL]
 
@@ -751,6 +770,7 @@ class DataProcessor():
         
         column_names_to_keep += [CHURN_TRIGGERED_SHIFTED_COLUMN_NAME]
         return agg, post_agg_1, column_names_to_keep
+
 
     def _transform_intervals_to_start_stop(self):
         
@@ -787,11 +807,11 @@ class DataProcessor():
             # Accepting the mild leakge for imputing on the whole dataset (only 412 missing vehicle start year values)
             df, _, _, _ = imputer_object.KNN_impute_vehicle_start_year(df)
 
-            
+
             group_and_sort_by_columns = [USER_ID_COL, INTERVAL_START_COL]
             df, vehicle_make_column_names = self._prepare_df(df, churn_adjusted_date_col_name)
             df_with_intervals = self._generate_intervals(df,
-                                                         churn_adjusted_date_col_name,
+                                                         ACTIVITY_DATE_COL, #NOTE: Temporary fix, should be as a variable 
                                                          interval_in_days,
                                                          vehicle_make_column_names)
 
@@ -909,11 +929,14 @@ class DataProcessor():
 
 
 
-from src.constants import paths_to_files_and_folders as const
+# from src.constants import paths_to_files_and_folders as const
 
-path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
-data_ = pl.read_csv(path_to_personal_filtered)
+# path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+# data_ = pl.read_csv(path_to_personal_filtered)
 
-dp = DataProcessor(data_)
+# dp = DataProcessor(data_)
 
-a = dp.apply_feature_engineering(data_,save_file_to=Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding\Data\final\features_personal_28_day_intervals.csv"))
+
+# # print(data_["churn_triggered"].sum())
+# data_prepared, _ = dp._prepare_df(data_)
+# dp._generate_intervals(data_prepared)
