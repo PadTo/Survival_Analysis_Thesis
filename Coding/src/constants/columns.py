@@ -1,6 +1,7 @@
 # constants/columns.py
 
 USER_ID_COL = "user_id"
+ACTIVITY_TYPE_COL = "activity_type"
 ACTIVITY_DATE_COL = "activity_date"
 CHURN_ADJUSTED_DATE_COL = "churn_adjusted_date"
 CHURN_TRIGGERED_COL = "churn_triggered"
@@ -11,7 +12,6 @@ VEHICLE_START_YEAR_COL = "vehicle_start_year"
 VEHICLE_END_YEAR_COL = "vehicle_end_year"
 VEHICLE_MILEAGE_COL = "vehicle_mileage"
 APP_COL = "app"
-ACTIVITY_TYPE_COL = "activity_type"
 STILL_IN_PRODUCTION_COL = "still_in_production"
 INTERVAL_START_COL = "interval_start"
 
