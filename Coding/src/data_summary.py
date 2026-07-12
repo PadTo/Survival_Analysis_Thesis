@@ -206,7 +206,6 @@ class DataSummary:
         )
 
         return gaps.describe(percentiles=percentiles).to_frame("gap_days")
-    
 
     def compute_vif(self, df: pl.DataFrame, pretty: dict, id_label_cols: list):
         features = df.drop(id_label_cols).to_pandas()
