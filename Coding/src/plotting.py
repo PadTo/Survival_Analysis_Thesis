@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 from matplotlib.axes import Axes
 import matplotlib as mpl
+from matplotlib.colors import LinearSegmentedColormap
 from .constants.thesis_plotting_style import PALETTE, COLORS, SEABORN_THEME, SCATTER_PLOT_SIZE_RANGE
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
@@ -659,6 +660,53 @@ class PlottingData:
         except Exception as e:
             print(f"Unexpected error {e}")
             raise e
+
+
+    def return_correlation_plot(self,
+                                df: pl.DataFrame,
+                                pretty: dict,
+                                ax: Axes | None = None,
+                                cols_to_drop: list = ["user_id", "interval_start", "interval_end", "churn_triggered_adjusted"]):
+    
+        cmap = LinearSegmentedColormap.from_list("thesis",colors=["#4C956C", "#FFFFFF", "#2C6E8F"])
+
+         
+        try:
+            if ax is None:
+                _, ax = plot.subplots()
+            
+            df = df.drop(cols_to_drop)
+            df_pd: pd.DataFrame = df.to_pandas()
+            df_pd_corr = df_pd.corr().rename(index=pretty, columns=pretty)
+            mask = np.triu(np.ones_like(df_pd_corr))
+            np.fill_diagonal(mask, 1)
+
+            sns.heatmap(
+                df_pd_corr, cmap=cmap, center=0, vmin=-1, vmax=1,
+                mask=mask, square=True, linewidths=0.5, linecolor="#E7EBED",
+                cbar_kws={"shrink": 0.6, "label": "Correlation"},
+                annot=True, fmt=".2f", annot_kws={"size": 6},
+                ax=ax,
+            )
+            
+            ax.set_title("Feature Correlation Matrix", color="#22333B", fontweight="bold", pad=14)
+            ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right", color="#5A6B73", fontsize=8)
+            ax.set_yticklabels(ax.get_yticklabels(), rotation=0, color="#5A6B73", fontsize=8)
+            
+            return ax
+    
+        except Exception as e:
+            print(f"Unexpected Error: {e}")
+            raise e
+
+        
+
+        
+
+        
+
+
+        pass
 
 # from src.constants import paths_to_files_and_folders as const
 # test_features_personal = const.PATH_TO_INTERIM_DATA / "personal_users_filtered_full_feature.csv"
