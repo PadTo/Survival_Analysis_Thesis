@@ -2,6 +2,8 @@ import polars as pl
 import pandas as pd
 from datetime import timedelta
 from pathlib import Path
+from statsmodels.tools.tools import add_constant
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 from .constants.cleaning import BURST_TIME_HR
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
@@ -204,4 +206,23 @@ class DataSummary:
         )
 
         return gaps.describe(percentiles=percentiles).to_frame("gap_days")
-        
+    
+
+    def compute_vif(self, df: pl.DataFrame, pretty: dict, id_label_cols: list):
+        features = df.drop(id_label_cols).to_pandas()
+        # Booleans break np.isfinite inside variance_inflation_factor; cast to int
+        bool_cols = features.select_dtypes(include=["bool"]).columns
+        features[bool_cols] = features[bool_cols].astype(int)
+        n_before = len(features)
+        features = features.dropna()  # VIF can't handle NaNs
+        n_dropped = n_before - len(features)
+        if n_dropped:
+            print(f"  Dropped {n_dropped} rows with NaNs ({len(features):,} remaining)")
+        X = add_constant(features)  # intercept needed for correct VIF
+        vif = pd.DataFrame({
+            "feature": X.columns,
+            "VIF": [variance_inflation_factor(X.values, i) for i in range(X.shape[1])],
+        })
+        vif = vif[vif["feature"] != "const"].copy()
+        vif["feature"] = vif["feature"].map(lambda c: pretty.get(c, c))
+        return vif.sort_values("VIF", ascending=False).reset_index(drop=True)
