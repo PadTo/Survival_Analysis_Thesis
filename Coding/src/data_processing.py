@@ -808,9 +808,9 @@ class DataProcessor():
             .alias(dates_list_entire_lookback)
         ]
 
-        mean_gap_col = COL_TEMPLATE_FORMAT.format(a=MEAN_GAP_COLUMN_NAME, start=0, end=second_period)
-        sd_gap_col   = COL_TEMPLATE_FORMAT.format(a=SD_GAP_COLUMN_NAME,   start=0, end=second_period)
-        cv_gap_col   = COL_TEMPLATE_FORMAT.format(a=CV_GAP_COLUMN_NAME,   start=0, end=second_period).replace("n_","")
+        mean_gap_col = COL_TEMPLATE_FORMAT.replace("n_","").format(a=MEAN_GAP_COLUMN_NAME, start=0, end=second_period)
+        sd_gap_col   = COL_TEMPLATE_FORMAT.replace("n_","").format(a=SD_GAP_COLUMN_NAME,   start=0, end=second_period)
+        cv_gap_col   = COL_TEMPLATE_FORMAT.replace("n_","").format(a=CV_GAP_COLUMN_NAME,   start=0, end=second_period)
 
         # Gaps between consecutive active days (in days); first element of diff is null and dropped
         gaps_expr = (
@@ -821,12 +821,13 @@ class DataProcessor():
         )
 
         # Mean and std of the gap distribution over the lookback window
-        post_agg_4 += [gaps_expr.list.mean().alias(mean_gap_col)]
-        post_agg_4 += [gaps_expr.list.std().alias(sd_gap_col)]
+        post_agg_4 += [gaps_expr.list.mean().fill_null(0).alias(mean_gap_col)]
+        post_agg_4 += [gaps_expr.list.std().fill_null(0).alias(sd_gap_col)]
 
         # No-activity flag: <= 1 date in the window means no gap can be computed
+        activity_flag_col = COL_TEMPLATE_FORMAT.replace("n_","").format(a=ACTIVITY_FLAG_COLUMN_NAME,start=0, end=second_period)
         post_agg_4 += [
-            (pl.col(dates_list_entire_lookback).list.len() > 1).alias(ACTIVITY_FLAG_COLUMN_NAME)
+            (pl.col(dates_list_entire_lookback).list.len() > 1).alias(activity_flag_col)
         ]
 
     
@@ -839,7 +840,7 @@ class DataProcessor():
         ]
         
 
-        column_names_to_keep += [ACTIVITY_FLAG_COLUMN_NAME, cv_gap_col]
+        column_names_to_keep += [activity_flag_col, cv_gap_col, mean_gap_col, sd_gap_col]
 
         return (agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, post_agg_5, column_names_to_keep)
 
@@ -990,7 +991,7 @@ class DataProcessor():
                 .drop(["_is_last_interval"])
                 .select(column_names_to_keep)
             )
-            print(df)
+      
             # Just for better readability when examining the data
             initial_column_ordering = [USER_ID_COL, INTERVAL_START_COL, INTERVAL_END_COL]
             df = df.select(initial_column_ordering + [c for c in df.columns if c not in initial_column_ordering])
@@ -1006,13 +1007,13 @@ class DataProcessor():
 
 
 
-from src.constants import paths_to_files_and_folders as const
+# from src.constants import paths_to_files_and_folders as const
 
-path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
-data_ = pl.read_csv(path_to_personal_filtered)
+# path_to_personal_filtered = const.PATH_TO_INTERIM_DATA / "personal_users_filtered.csv"
+# data_ = pl.read_csv(path_to_personal_filtered)
 
-dp = DataProcessor(data_)
+# dp = DataProcessor(data_)
 
-d = dp.apply_feature_engineering(data_)
+# d = dp.apply_feature_engineering(data_)
 
-print(d.columns)
+# print(d.columns)
