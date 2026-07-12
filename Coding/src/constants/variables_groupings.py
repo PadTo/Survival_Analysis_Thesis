@@ -2,8 +2,8 @@ brand_group_map = {
     "volkswagen": "volkswagen",
     "audi": "audi",
     "skoda": "skoda",
-    "seat": "seat",
-    "bmw": "bmw",
+    "seat": "other_rare",
+    "bmw": "other_rare",
 
     "mini": "other_rare",
     "bmw moto": "other_rare",
@@ -112,7 +112,9 @@ pretty_new_features = {
 
   
     "CV_gap_0_56_days": "Gap CV (56d)",
-    "active_flag": "Active flag",
+    "sd_gap_0_56_days": "SD activity (56d)",
+    "mean_gap_0_56_days":  "Mean activity (56d)",
+    "active_flag_0_56_days": "Active flag (56d)",
 }
 
 COLUMS_TO_EXCLUDE: list = ["user_id", "interval_start", "interval_end", "churn_triggered_adjusted"]
