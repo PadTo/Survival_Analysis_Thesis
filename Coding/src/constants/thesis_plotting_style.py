@@ -45,3 +45,4 @@ SEABORN_THEME = {
         "legend.frameon": False,
     },
 }
+
