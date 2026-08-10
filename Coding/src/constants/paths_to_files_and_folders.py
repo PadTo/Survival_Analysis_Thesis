@@ -1,9 +1,9 @@
 from pathlib import Path
 
-ABSOLUTE_PATH = Path(r"C:\Users\Tomas\Desktop\Thesis Stuff\Survival_Analysis_Thesis\Coding")
+ABSOLUTE_PATH = Path(__file__).resolve().parents[2]
 PATH_TO_DATA_FOLDER = ABSOLUTE_PATH / "Data"
-PATH_TO_RAW_DATA  = PATH_TO_DATA_FOLDER / "raw"
-PATH_TO_INTERIM_DATA =  PATH_TO_DATA_FOLDER / "interim"
+PATH_TO_RAW_DATA = PATH_TO_DATA_FOLDER / "raw"
+PATH_TO_INTERIM_DATA = PATH_TO_DATA_FOLDER / "interim"
 PATH_TO_FINAL_DATA = PATH_TO_DATA_FOLDER / "final"
 
 PATH_TO_RAW_ACTIVITY_DATA = PATH_TO_RAW_DATA / "activity.csv"

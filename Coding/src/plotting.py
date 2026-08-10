@@ -17,7 +17,7 @@ from .constants.columns import (
 )
 from .constants.thesis_plotting_style import IN_FIGURE_TEXT_SIZE_MULTIPLIER
 from .constants.cleaning import DEFAULT_CAR_SHARE_ABS, BURST_TIME_HR
-from src.constants.processor import CHURN_TRIGGERED_SHIFTED_COLUMN_NAME, INTERVAL_END_COL
+from .constants.processor import CHURN_TRIGGERED_SHIFTED_COLUMN_NAME, INTERVAL_END_COL
 
 # ============================================================
 #  Fixed (non-templated) generated column names

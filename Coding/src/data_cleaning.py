@@ -2,7 +2,6 @@ import datetime
 from pathlib import Path
 import pandas as pd
 from colorama import Fore
-from .constants import paths_to_files_and_folders
 from .constants.columns import (
     USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
     CHURN_TRIGGERED_COL, VEHICLE_ID_COL, VEHICLE_MAKE_COL,
