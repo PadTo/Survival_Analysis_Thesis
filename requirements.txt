@@ -1,0 +1,9 @@
+colorama
+jupyterlab
+matplotlib
+numpy
+pandas
+polars
+scikit-learn
+seaborn
+statsmodels

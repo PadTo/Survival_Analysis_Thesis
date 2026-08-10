@@ -2,7 +2,24 @@ library(survival)
 library(tidyverse)
 library(dplyr)
 
-data_personal <- read.csv("C:\\Users\\Tomas\\Desktop\\Thesis Stuff\\Survival_Analysis_Thesis\\Coding\\Data\\final\\features_personal_14_day_intervals.csv")
+candidate_roots <- c(getwd(), file.path(getwd(), "Coding"), dirname(getwd()))
+project_root <- candidate_roots[
+  dir.exists(file.path(candidate_roots, "src")) &
+    dir.exists(file.path(candidate_roots, "notebooks"))
+][1]
+
+if (is.na(project_root)) {
+  stop("Could not locate the Coding project directory.")
+}
+
+personal_features_path <- file.path(
+  project_root,
+  "Data",
+  "final",
+  "features_personal_14_day_intervals_new_features.csv"
+)
+
+data_personal <- read.csv(personal_features_path)
 data_personal <- data_personal[order(data_personal$user_id, data_personal$interval_start), ]
 data_personal$churn_triggered_adjusted = as.numeric(as.logical(data_personal$churn_triggered_adjusted))
 head(data_personal)
