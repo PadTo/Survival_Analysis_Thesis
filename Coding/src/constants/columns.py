@@ -3,6 +3,7 @@
 USER_ID_COL = "user_id"
 ACTIVITY_TYPE_COL = "activity_type"
 ACTIVITY_DATE_COL = "activity_date"
+REGISTERED_DATE_COL = "registered_date"
 CHURN_ADJUSTED_DATE_COL = "churn_adjusted_date"
 CHURN_TRIGGERED_COL = "churn_triggered"
 VEHICLE_ID_COL = "vehicle_id"
