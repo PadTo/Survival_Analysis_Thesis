@@ -4,6 +4,7 @@ matplotlib
 numpy
 pandas
 polars
+pyarrow
 scikit-learn
 seaborn
 statsmodels

@@ -1,21 +1,40 @@
-import pandas as pd
-from pathlib import Path
-import polars as pl
 from datetime import timedelta
-from .constants.variables_groupings import activity_type_groups, app_type_groups, brand_group_map
-from .imputing import Imputer
+from pathlib import Path
+
+import pandas as pd
+import polars as pl
+
 from .constants.columns import (
-    USER_ID_COL, ACTIVITY_DATE_COL, CHURN_ADJUSTED_DATE_COL,
-    CHURN_TRIGGERED_COL, VEHICLE_ID_COL, VEHICLE_MAKE_COL,
-    VEHICLE_MODEL_COL, VEHICLE_START_YEAR_COL, VEHICLE_END_YEAR_COL,
-    VEHICLE_MILEAGE_COL, APP_COL, ACTIVITY_TYPE_COL, ACTIVITY_DATE_COL,
-    STILL_IN_PRODUCTION_COL, INTERVAL_START_COL
+    ACTIVITY_DATE_COL,
+    ACTIVITY_TYPE_COL,
+    APP_COL,
+    CHURN_ADJUSTED_DATE_COL,
+    CHURN_TRIGGERED_COL,
+    INTERVAL_START_COL,
+    STILL_IN_PRODUCTION_COL,
+    USER_ID_COL,
+    VEHICLE_END_YEAR_COL,
+    VEHICLE_ID_COL,
+    VEHICLE_MAKE_COL,
+    VEHICLE_MILEAGE_COL,
+    VEHICLE_MODEL_COL,
+    VEHICLE_START_YEAR_COL,
 )
 from .constants.processor import (
-    LOOKBACK_PERIODS, INTERVAL_IN_DAYS, SUM_TO_LIMIT_IN_DAYS,
-    FIRST_PERIOD_IN_DAYS, SECOND_PERIOD_IN_DAYS, INTERVAL_END_COL,
-    CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)
- 
+    CHURN_TRIGGERED_SHIFTED_COLUMN_NAME,
+    FIRST_PERIOD_IN_DAYS,
+    INTERVAL_END_COL,
+    INTERVAL_IN_DAYS,
+    LOOKBACK_PERIODS,
+    SECOND_PERIOD_IN_DAYS,
+    SUM_TO_LIMIT_IN_DAYS,
+)
+from .constants.variables_groupings import (
+    activity_type_groups,
+    app_type_groups,
+    brand_group_map,
+)
+from .imputing import Imputer
 
 # ============================================================
 #  Sentinel values filling empty-interval / missing rows
@@ -57,10 +76,9 @@ LAST_ACTIVITY_DATE_COL: str = "last_activity_date"
 RECENCY_COL: str = "recency"
 PROP_IN_PROD_COL: str = "prop_in_prod"
 CUMULATIVE_COUNT_TOTAL_COL: str = "cumulative_count_total"
-MEAN_AGE_INTERMEDIATE_COL: str = "vehicle_mean_age_intermediate"
 VEHICLE_AGE_COLUMN_NAME: str = "vehicle_age"
-VEHICLE_MEAN_AGE_COLUMN_NAME: str = "vehicle_mean_age_in_an_interval"
 VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME: str = "vehicle_mean_age_overall"
+VEHICLE_AGE_SUM_COLUMN_NAME: str = "vehicle_age_sum_in_an_interval"
 FIRST_DISTINCT_COLUMN_NAME: str = "first_distinct"
 ACTIVITY_FLAG_COLUMN_NAME: str = "active_flag"
 MEAN_GAP_COLUMN_NAME = "mean_gap"
@@ -68,16 +86,16 @@ SD_GAP_COLUMN_NAME = "sd_gap"
 CV_GAP_COLUMN_NAME = "CV_gap"
 
 
-class DataProcessor():
-
+class DataProcessor:
     def __init__(self, df: pd.DataFrame | pl.DataFrame) -> None:
         self.df = df.copy(deep=True) if type(df) == pd.DataFrame else df
-        
 
-    def _prepare_df(self,
-                    df: pl.DataFrame,
-                    churn_adjusted_date_col_name: str | None = None,
-                    activity_date_col_name: str | None = None) -> tuple[pl.DataFrame, list]:
+    def _prepare_df(
+        self,
+        df: pl.DataFrame,
+        churn_adjusted_date_col_name: str | None = None,
+        activity_date_col_name: str | None = None,
+    ) -> tuple[pl.DataFrame, list]:
         """
         Parses dates, normalises categorical text, groups categories, and one-hot
         encodes vehicle make.
@@ -86,7 +104,9 @@ class DataProcessor():
         downstream aggregation needs to know which columns the one-hot step created.
         """
 
-        churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
+        churn_adjusted_date_col_name = (
+            churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
+        )
         activity_date_col_name = activity_date_col_name or ACTIVITY_DATE_COL
 
         # Sorting by user and date: the interval grid and downstream join_asof both assume chronological order per user
@@ -107,21 +127,28 @@ class DataProcessor():
         # Collapsing raw categories into their groupings so counts aggregate at the group level, not the raw-value level
         df = df.with_columns(
             pl.col(ACTIVITY_TYPE_COL)
-                .str.to_lowercase()
-                .str.strip_chars()
-                .replace(activity_type_groups),
+            .str.to_lowercase()
+            .str.strip_chars()
+            .replace(activity_type_groups),
             pl.col(APP_COL)
-                .str.to_lowercase()
-                .str.strip_chars()
-                .replace(app_type_groups),
+            .str.to_lowercase()
+            .str.strip_chars()
+            .replace(app_type_groups),
             pl.col(VEHICLE_MAKE_COL)
-                .str.to_lowercase()
-                .str.strip_chars()
-                .replace(brand_group_map)
+            .str.to_lowercase()
+            .str.strip_chars()
+            .replace(brand_group_map),
         )
 
-        # Creating an age column of a vehicle later needed when computing mean age of fleet per user per history
-        df = df.with_columns((pl.col(VEHICLE_END_YEAR_COL) - pl.col(VEHICLE_START_YEAR_COL)).alias(VEHICLE_AGE_COLUMN_NAME))
+        # Vehicle age at observation time, rather than the model's production span.
+        df = df.with_columns(
+            (
+                pl.col(activity_date_col_name).dt.year()
+                - pl.col(VEHICLE_START_YEAR_COL).cast(pl.Int32)
+            )
+            .clip(lower_bound=0)
+            .alias(VEHICLE_AGE_COLUMN_NAME)
+        )
 
         # Setting aside vehicle make column to concatenate it later (needed for mean age feature aggregation computations)
         df_make_col = df.select(pl.col(VEHICLE_MAKE_COL))
@@ -130,16 +157,22 @@ class DataProcessor():
         df = df.to_dummies(VEHICLE_MAKE_COL)
         df = pl.concat([df, df_make_col], how="horizontal")
 
-        vehicle_make_column_names = [c for c in df.columns if (c.lower().strip()).startswith(f"{VEHICLE_MAKE_COL}_")]
-
+        vehicle_make_column_names = [
+            c
+            for c in df.columns
+            if (c.lower().strip()).startswith(f"{VEHICLE_MAKE_COL}_")
+        ]
 
         return (df, vehicle_make_column_names)
 
-    def _generate_intervals(self,
-                            df: pl.DataFrame,
-                            activity_date_col_name: str | None = None,
-                            interval: int = INTERVAL_IN_DAYS,
-                            vehicle_make_column_names: list | None = None) -> pl.DataFrame:
+    def _generate_intervals(
+        self,
+        df: pl.DataFrame,
+        activity_date_col_name: str | None = None,
+        interval: int = INTERVAL_IN_DAYS,
+        vehicle_make_column_names: list | None = None,
+        churn_adjusted_date_col_name: str | None = None,
+    ) -> pl.DataFrame:
         """
         Builds a per-user grid of fixed-width intervals and assigns each activity
         row to its interval.
@@ -150,23 +183,26 @@ class DataProcessor():
         """
 
         activity_date_col_name = activity_date_col_name or ACTIVITY_DATE_COL
+        churn_adjusted_date_col_name = (
+            churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
+        )
 
         user_min_max_dates = df.group_by(USER_ID_COL).agg(
             pl.col(activity_date_col_name).min().alias(START_DATE_COL),
-            pl.col(activity_date_col_name).max().alias(END_DATE_COL)
+            pl.col(activity_date_col_name).max().alias(END_DATE_COL),
         )
 
-        intervals = user_min_max_dates.with_columns(
-            pl.date_ranges(
-                start=pl.col(START_DATE_COL),
-                end=pl.col(END_DATE_COL),
-                interval=timedelta(days=interval)
-            ).alias(INTERVAL_START_COL)
-        ).explode(INTERVAL_START_COL).select([USER_ID_COL, INTERVAL_START_COL])
-
-
-      
-
+        intervals = (
+            user_min_max_dates.with_columns(
+                pl.date_ranges(
+                    start=pl.col(START_DATE_COL),
+                    end=pl.col(END_DATE_COL),
+                    interval=timedelta(days=interval),
+                ).alias(INTERVAL_START_COL)
+            )
+            .explode(INTERVAL_START_COL)
+            .select([USER_ID_COL, INTERVAL_START_COL])
+        )
 
         # Backward asof: each activity attaches to the most recent interval start at or before its date
         df_with_intervals = df.join_asof(
@@ -174,26 +210,26 @@ class DataProcessor():
             left_on=activity_date_col_name,
             right_on=INTERVAL_START_COL,
             by=USER_ID_COL,
-            strategy="backward"
+            strategy="backward",
         )
-
-
 
         # Re-joining from the full interval grid reintroduces intervals that had zero activity
         df_with_intervals = intervals.join(
-            df_with_intervals,
-            on=[USER_ID_COL, INTERVAL_START_COL],
-            how="left"
+            df_with_intervals, on=[USER_ID_COL, INTERVAL_START_COL], how="left"
         )
 
-        df_with_intervals = self._fill_null_values(df_with_intervals,
-                                                   vehicle_make_column_names)
-        
+        df_with_intervals = self._fill_null_values(
+            df_with_intervals, vehicle_make_column_names, churn_adjusted_date_col_name
+        )
+
         return df_with_intervals
 
-    def _fill_null_values(self,
-                          df: pl.DataFrame,
-                          vehicle_make_column_names: list | None):
+    def _fill_null_values(
+        self,
+        df: pl.DataFrame,
+        vehicle_make_column_names: list | None,
+        churn_adjusted_date_col_name: str | None = None,
+    ):
         """
         Fills nulls left by the empty intervals introduced in the interval grid.
 
@@ -201,6 +237,9 @@ class DataProcessor():
         explicitly: counts and flags go to a zero/False/sentinel value rather than
         being left null, so later sums and comparisons treat them as inactivity.
         """
+        churn_adjusted_date_col_name = (
+            churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
+        )
 
         col_fill_list = [
             pl.col(CHURN_TRIGGERED_COL).fill_null(False),
@@ -214,21 +253,27 @@ class DataProcessor():
             pl.col(APP_COL).fill_null(UNKNOWN_VALUE),
             pl.col(ACTIVITY_TYPE_COL).fill_null(NONE_ACTIVITY_VALUE),
             pl.col(STILL_IN_PRODUCTION_COL).fill_null(False),
-            pl.col(CHURN_ADJUSTED_DATE_COL).fill_null(pl.lit(None).cast(pl.Date))]
+            pl.col(churn_adjusted_date_col_name).fill_null(pl.lit(None).cast(pl.Date)),
+        ]
 
         # Make dummies are absent on empty intervals; zero means the make was not used that interval
         if vehicle_make_column_names:
-            col_fill_list += [pl.col(vehicle_make).fill_null(0) for vehicle_make in vehicle_make_column_names]
+            col_fill_list += [
+                pl.col(vehicle_make).fill_null(0)
+                for vehicle_make in vehicle_make_column_names
+            ]
 
         df = df.with_columns(col_fill_list)
 
         return df
 
-    def _build_lagged_columns(self,
-                              base_columns: dict[str, str],
-                              lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
-                              interval_in_days: int = INTERVAL_IN_DAYS,
-                              fill_value: int | list | None = None) -> tuple[list, dict[tuple[int, int], list[str]]]:
+    def _build_lagged_columns(
+        self,
+        base_columns: dict[str, str],
+        lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+        interval_in_days: int = INTERVAL_IN_DAYS,
+        fill_value: int | list | None = None,
+    ) -> tuple[list, dict[tuple[int, int], list[str]]]:
         """
         Builds shift expressions and a window registry for a set of base columns.
 
@@ -252,12 +297,11 @@ class DataProcessor():
         col_registry: dict[tuple[int, int], list[str]] = {
             (0, interval_in_days): [
                 COL_TEMPLATE_FORMAT.format(a=token, start=0, end=interval_in_days)
-                for token in base_columns.keys()
+                for token in base_columns
             ]
         }
 
         for period in lookback_periods:
-
             start_interval = interval_in_days * period
             end_interval = interval_in_days * (period + 1)
 
@@ -269,21 +313,29 @@ class DataProcessor():
                     shifted = pl.col(source_col).shift(period)
 
                 lag_expressions.append(
-                    shifted.alias(COL_TEMPLATE_FORMAT.format(a=token, start=start_interval, end=end_interval))
+                    shifted.alias(
+                        COL_TEMPLATE_FORMAT.format(
+                            a=token, start=start_interval, end=end_interval
+                        )
+                    )
                 )
 
             col_registry[(start_interval, end_interval)] = [
-                COL_TEMPLATE_FORMAT.format(a=token, start=start_interval, end=end_interval)
+                COL_TEMPLATE_FORMAT.format(
+                    a=token, start=start_interval, end=end_interval
+                )
                 for token in base_columns
             ]
 
         return lag_expressions, col_registry
 
-    def _columns_within_window(self,
-                           col_registry: dict[tuple[int, int], list[str]],
-                           start_from_days: int = 0,
-                           end_at_days: int | None = None,
-                           token_filter: str | None = None) -> list[str]:
+    def _columns_within_window(
+        self,
+        col_registry: dict[tuple[int, int], list[str]],
+        start_from_days: int = 0,
+        end_at_days: int | None = None,
+        token_filter: str | None = None,
+    ) -> list[str]:
         """
         Selects registry columns whose window falls within [start_from_days,
         end_at_days], optionally restricted to names containing token_filter.
@@ -300,11 +352,12 @@ class DataProcessor():
             if token_filter is None or token_filter in col
         ]
 
-    def _generate_activity_feature_aggregation(self,
-
-                                           lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
-                                           interval_in_days: int = INTERVAL_IN_DAYS,
-                                           sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS) -> tuple[list, ...]:
+    def _generate_activity_feature_aggregation(
+        self,
+        lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+        interval_in_days: int = INTERVAL_IN_DAYS,
+        sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
+    ) -> tuple[list, ...]:
         """
         Builds the staged expressions for activity-type composition features.
 
@@ -332,11 +385,12 @@ class DataProcessor():
         post_agg_3: list = []
         column_names_to_keep: list = []
         # Sorting the activity groups so the produced column order is stable across runs (set iteration order is not)
-        activity_types: list[str] = list(sorted(set(activity_type_groups.values())))
+        activity_types: list[str] = sorted(set(activity_type_groups.values()))
 
         agg: list = [
-            (pl.col(ACTIVITY_TYPE_COL) == a).sum().alias(
-                COL_TEMPLATE_FORMAT.format(a=a, start=0, end=interval_in_days))
+            (pl.col(ACTIVITY_TYPE_COL) == a)
+            .sum()
+            .alias(COL_TEMPLATE_FORMAT.format(a=a, start=0, end=interval_in_days))
             for a in activity_types
         ]
 
@@ -345,54 +399,66 @@ class DataProcessor():
             for a in activity_types
         }
         post_agg_1, col_registry = self._build_lagged_columns(
-            base_columns, lookback_periods, interval_in_days, fill_value=0)
+            base_columns, lookback_periods, interval_in_days, fill_value=0
+        )
 
         columns_to_sum_over_for_total_activity_count = self._columns_within_window(
-            col_registry, end_at_days=sum_to_limit_in_days)
+            col_registry, end_at_days=sum_to_limit_in_days
+        )
 
         # Total over the window is the proportion denominator shared by every activity type
-        total_actions_col_name = TOTAL_ACTIONS_COL_TEMPLATE.format(start=0, end=sum_to_limit_in_days)
+        total_actions_col_name = TOTAL_ACTIONS_COL_TEMPLATE.format(
+            start=0, end=sum_to_limit_in_days
+        )
         post_agg_2 += [
-            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_activity_count])
-            .alias(total_actions_col_name)
+            pl.sum_horizontal(
+                [pl.col(c) for c in columns_to_sum_over_for_total_activity_count]
+            ).alias(total_actions_col_name)
         ]
 
         for activity_type in activity_types:
-
             columns = self._columns_within_window(
-                col_registry, end_at_days=sum_to_limit_in_days, token_filter=activity_type)
+                col_registry,
+                end_at_days=sum_to_limit_in_days,
+                token_filter=activity_type,
+            )
 
-            column_name = COL_TEMPLATE_FORMAT.format(a=activity_type, start=0, end=sum_to_limit_in_days)
+            column_name = COL_TEMPLATE_FORMAT.format(
+                a=activity_type, start=0, end=sum_to_limit_in_days
+            )
             post_agg_2 += [
-                pl.sum_horizontal([pl.col(c) for c in columns])
-                .alias(column_name)
+                pl.sum_horizontal([pl.col(c) for c in columns]).alias(column_name)
             ]
 
-            prop_column_name = PROP_COL_TEMPLATE.format(a=activity_type, start=0, end=sum_to_limit_in_days)
+            prop_column_name = PROP_COL_TEMPLATE.format(
+                a=activity_type, start=0, end=sum_to_limit_in_days
+            )
             # fill_nan(0): an inactive window gives 0/0, which reads as zero share of that activity
             post_agg_3 += [
-                (pl.col(column_name) / pl.col(total_actions_col_name)).alias(prop_column_name).fill_nan(0),
+                (pl.col(column_name) / pl.col(total_actions_col_name))
+                .alias(prop_column_name)
+                .fill_nan(0),
             ]
 
-            if prop_column_name != "prop_other_0_56":
+            if activity_type != "other":
                 column_names_to_keep += [prop_column_name]
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
-    def _generate_vehicle_characteristics_features_aggregation(self,
-                                                          vehicle_make_col_names: list,
-                                                          interval_in_days: int = INTERVAL_IN_DAYS) -> tuple[list, ...]:
+    def _generate_vehicle_characteristics_features_aggregation(
+        self, vehicle_make_col_names: list, interval_in_days: int = INTERVAL_IN_DAYS
+    ) -> tuple[list, ...]:
         """
-            Builds make-portfolio features from the one-hot make columns.
+        Builds make-portfolio features from the one-hot make columns.
 
-            Counts accumulate cumulatively per user rather than resetting per interval:
-            the set of makes a user has connected is a slow-moving characteristic of who
-            they are, not a per-window behaviour. From the running counts it derives each
-            make's overall share. Cumulative counts themselves are intermediates and are
-            not kept.
+        Counts accumulate cumulatively per user rather than resetting per interval:
+        the set of makes a user has connected is a slow-moving characteristic of who
+        they are, not a per-window behaviour. From the running counts it derives each
+        make's overall share. Cumulative counts themselves are intermediates and are
+        not kept.
 
-            Returns:
-                Tuple of (agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep).
+        Returns:
+            Tuple of (agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep).
         """
 
         agg: list = []
@@ -402,110 +468,128 @@ class DataProcessor():
         column_names_to_keep: list = []
         cum_count_col_names: list = []
 
+        valid_distinct_vehicle = pl.col(FIRST_DISTINCT_COLUMN_NAME) & (
+            pl.col(VEHICLE_MAKE_COL) != UNKNOWN_VALUE
+        )
+        total_car_count = COL_TEMPLATE_FORMAT.format(
+            a=TOTAL_CARS_TOKEN,
+            start=0,
+            end=interval_in_days,
+        )
+
         ##___MEAN AGE___##
-        agg += [(pl.col(VEHICLE_AGE_COLUMN_NAME))
-                .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True )
-                        &
-                        (pl.col(VEHICLE_MAKE_COL) != UNKNOWN_VALUE))
-                .mean()
-                .alias(VEHICLE_MEAN_AGE_COLUMN_NAME)]
+        agg += [
+            pl.col(VEHICLE_AGE_COLUMN_NAME)
+            .filter(valid_distinct_vehicle)
+            .sum()
+            .alias(VEHICLE_AGE_SUM_COLUMN_NAME)
+        ]
 
-        post_agg_1 += [(pl.col(VEHICLE_MEAN_AGE_COLUMN_NAME)
-                        .cum_sum()
-                        .truediv(pl.col(VEHICLE_MEAN_AGE_COLUMN_NAME).cum_count()))
-                        .alias(MEAN_AGE_INTERMEDIATE_COL)]  # Can't forward fill inplace -> assigning an intermediate column
-
-        # Null values for intervals with no activity -> forward fill to carry information from
-        # previous periods
-        post_agg_2 += [pl.col(MEAN_AGE_INTERMEDIATE_COL)
-                       .forward_fill()
-                       .alias(VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME)
-                       .over(USER_ID_COL)]
+        # Weight by the number of newly observed vehicles in each interval. Averaging
+        # interval means would give sparse intervals the same weight as dense ones.
+        post_agg_1 += [
+            (
+                pl.col(VEHICLE_AGE_SUM_COLUMN_NAME).cum_sum().over(USER_ID_COL)
+                / pl.col(total_car_count).cum_sum().over(USER_ID_COL)
+            )
+            .fill_nan(0)
+            .fill_null(0)
+            .alias(VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME)
+        ]
 
         column_names_to_keep += [VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME]
 
         ##__STILL IN PRODUCTION PROPORTIONS___##
 
-        still_in_prod_count = COL_TEMPLATE_FORMAT.format(a=STILL_IN_PRODUCTION_TOKEN,
-                                                  start=0,
-                                                  end=interval_in_days)
-        total_car_count = COL_TEMPLATE_FORMAT.format(a=TOTAL_CARS_TOKEN,
-                                                  start=0,
-                                                  end=interval_in_days)
+        still_in_prod_count = COL_TEMPLATE_FORMAT.format(
+            a=STILL_IN_PRODUCTION_TOKEN,
+            start=0,
+            end=interval_in_days,
+        )
 
-        agg += [pl.col(STILL_IN_PRODUCTION_COL)
-                .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True)
-                        &
-                        (pl.col(VEHICLE_MAKE_COL) != UNKNOWN_VALUE))
-                .sum()
-                .alias(still_in_prod_count),
+        agg += [
+            pl.col(STILL_IN_PRODUCTION_COL)
+            .filter(valid_distinct_vehicle)
+            .sum()
+            .alias(still_in_prod_count),
+            pl.col(STILL_IN_PRODUCTION_COL)
+            .filter(valid_distinct_vehicle)
+            .count()
+            .alias(total_car_count),
+        ]
 
-                pl.col(STILL_IN_PRODUCTION_COL)
-                .filter((pl.col(FIRST_DISTINCT_COLUMN_NAME) == True)
-                        &
-                        (pl.col(VEHICLE_MAKE_COL) != UNKNOWN_VALUE))
-                .count()
-                .alias(total_car_count)]
-
-        
-        post_agg_1 += [(pl.col(still_in_prod_count).cum_sum().over(USER_ID_COL) /
-                        pl.col(total_car_count).cum_sum().over(USER_ID_COL))
-                        .fill_nan(0)
-                        .alias(PROP_IN_PROD_COL)]
-
+        post_agg_1 += [
+            (
+                pl.col(still_in_prod_count).cum_sum().over(USER_ID_COL)
+                / pl.col(total_car_count).cum_sum().over(USER_ID_COL)
+            )
+            .fill_nan(0)
+            .alias(PROP_IN_PROD_COL)
+        ]
 
         column_names_to_keep += [PROP_IN_PROD_COL]
 
-
         ##___MAKE PROPORTIONS___##
         for vehicle_make_col_name in vehicle_make_col_names:
-            
             n_count_col_name = COL_TEMPLATE_FORMAT.format(
-                                                a=vehicle_make_col_name,
-                                                start=0,
-                                                end=interval_in_days)
+                a=vehicle_make_col_name, start=0, end=interval_in_days
+            )
 
             cum_count_col_name = CUMULATIVE_COUNT_COL_TEMPLATE.format(
-                name=vehicle_make_col_name)
+                name=vehicle_make_col_name
+            )
 
             cum_count_col_names += [cum_count_col_name]
 
-            agg += [(pl.col(vehicle_make_col_name) == 1).sum().alias(n_count_col_name)]
+            agg += [
+                (pl.col(vehicle_make_col_name) == 1)
+                .filter(valid_distinct_vehicle)
+                .sum()
+                .alias(n_count_col_name)
+            ]
 
             # Accumulating per user so the count reflects the whole garage seen up to each interval
-            post_agg_1 += [pl.col(n_count_col_name)
-                        .cum_sum()
-                        .over(pl.col(USER_ID_COL))
-                        .alias(cum_count_col_name)]
-
+            post_agg_1 += [
+                pl.col(n_count_col_name)
+                .cum_sum()
+                .over(pl.col(USER_ID_COL))
+                .alias(cum_count_col_name)
+            ]
 
         # Total across makes is the denominator for the per-make shares
         post_agg_2 += [
-            pl.sum_horizontal([pl.col(c) for c in cum_count_col_names])
-            .alias(CUMULATIVE_COUNT_TOTAL_COL)
+            pl.sum_horizontal([pl.col(c) for c in cum_count_col_names]).alias(
+                CUMULATIVE_COUNT_TOTAL_COL
+            )
         ]
 
         post_agg_3 += [
             (pl.col(col) / pl.col(CUMULATIVE_COUNT_TOTAL_COL))
             .fill_nan(0)
-            .alias(OVERALL_PROP_COL_TEMPLATE.format(name=col.replace("cumulative_count_", "")))
+            .alias(
+                OVERALL_PROP_COL_TEMPLATE.format(
+                    name=col.replace("cumulative_count_", "")
+                )
+            )
             for col in cum_count_col_names
         ]
 
         column_names_to_keep += [
             OVERALL_PROP_COL_TEMPLATE.format(name=col.replace("cumulative_count_", ""))
-            for col in cum_count_col_names if col != "cumulative_count_vehicle_make_other_rare"
+            for col in cum_count_col_names
+            if col != "cumulative_count_vehicle_make_other_rare"
         ]
-  
 
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
-    def _generate_app_column_features_aggregation(self,
-                                             lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
-                                             interval_in_days: int = INTERVAL_IN_DAYS,
-                                             sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
-                                             first_period: int = FIRST_PERIOD_IN_DAYS,
-                                             second_period: int = SECOND_PERIOD_IN_DAYS) -> tuple[list, ...]:
+    def _generate_app_column_features_aggregation(
+        self,
+        lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+        interval_in_days: int = INTERVAL_IN_DAYS,
+        sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
+        first_period: int = FIRST_PERIOD_IN_DAYS,
+        second_period: int = SECOND_PERIOD_IN_DAYS,
+    ) -> tuple[list, ...]:
         """
         Builds app-usage composition and migration features.
 
@@ -524,8 +608,9 @@ class DataProcessor():
         apps: list[str] = list(app_type_groups.keys())
 
         agg: list = [
-            (pl.col(APP_COL) == app).sum().alias(
-                COL_TEMPLATE_FORMAT.format(a=app, start=0, end=interval_in_days))
+            (pl.col(APP_COL) == app)
+            .sum()
+            .alias(COL_TEMPLATE_FORMAT.format(a=app, start=0, end=interval_in_days))
             for app in apps
         ]
 
@@ -534,48 +619,85 @@ class DataProcessor():
             for app in apps
         }
         post_agg_1, col_registry = self._build_lagged_columns(
-            base_columns, lookback_periods, interval_in_days, fill_value=0)
+            base_columns, lookback_periods, interval_in_days, fill_value=0
+        )
 
         columns_to_sum_over_for_total_app_count = self._columns_within_window(
-            col_registry, end_at_days=sum_to_limit_in_days)
+            col_registry, end_at_days=sum_to_limit_in_days
+        )
 
         # Per-window totals act as the denominators for the windowed main-app proportions feeding the drift
         columns_to_sum_first_window_app = self._columns_within_window(
-            col_registry, start_from_days=0, end_at_days=first_period)
+            col_registry, start_from_days=0, end_at_days=first_period
+        )
 
         columns_to_sum_second_window_app = self._columns_within_window(
-            col_registry, start_from_days=first_period, end_at_days=second_period)
+            col_registry, start_from_days=first_period, end_at_days=second_period
+        )
 
-        total_app_col_name_0_56  = COL_TEMPLATE_FORMAT.format(a=TOTAL_APP_TOKEN, start=0,            end=sum_to_limit_in_days)
-        total_app_0_28_col_name  = COL_TEMPLATE_FORMAT.format(a=TOTAL_APP_TOKEN, start=0,            end=first_period)
-        total_app_28_56_col_name = COL_TEMPLATE_FORMAT.format(a=TOTAL_APP_TOKEN, start=first_period, end=second_period)
+        total_app_col_name_0_56 = COL_TEMPLATE_FORMAT.format(
+            a=TOTAL_APP_TOKEN, start=0, end=sum_to_limit_in_days
+        )
+        total_app_0_28_col_name = COL_TEMPLATE_FORMAT.format(
+            a=TOTAL_APP_TOKEN, start=0, end=first_period
+        )
+        total_app_28_56_col_name = COL_TEMPLATE_FORMAT.format(
+            a=TOTAL_APP_TOKEN, start=first_period, end=second_period
+        )
 
         post_agg_2 += [
-            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_over_for_total_app_count]).alias(total_app_col_name_0_56),
-            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_first_window_app]).alias(total_app_0_28_col_name),
-            pl.sum_horizontal([pl.col(c) for c in columns_to_sum_second_window_app]).alias(total_app_28_56_col_name),
+            pl.sum_horizontal(
+                [pl.col(c) for c in columns_to_sum_over_for_total_app_count]
+            ).alias(total_app_col_name_0_56),
+            pl.sum_horizontal(
+                [pl.col(c) for c in columns_to_sum_first_window_app]
+            ).alias(total_app_0_28_col_name),
+            pl.sum_horizontal(
+                [pl.col(c) for c in columns_to_sum_second_window_app]
+            ).alias(total_app_28_56_col_name),
         ]
 
         # Only the main app is summed per window; with two apps the other is its complement, so both shares would be perfectly collinear
-        main_token = list(base_columns.keys())[0]
+        main_token = next(iter(base_columns))
 
-        cols_main_0_28  = self._columns_within_window(col_registry, start_from_days=0,            end_at_days=first_period,  token_filter=main_token)
-        cols_main_28_56 = self._columns_within_window(col_registry, start_from_days=first_period, end_at_days=second_period, token_filter=main_token)
+        cols_main_0_28 = self._columns_within_window(
+            col_registry,
+            start_from_days=0,
+            end_at_days=first_period,
+            token_filter=main_token,
+        )
+        cols_main_28_56 = self._columns_within_window(
+            col_registry,
+            start_from_days=first_period,
+            end_at_days=second_period,
+            token_filter=main_token,
+        )
 
-        main_0_28_col  = COL_TEMPLATE_FORMAT.format(a=main_token, start=0,            end=first_period)
-        main_28_56_col = COL_TEMPLATE_FORMAT.format(a=main_token, start=first_period, end=second_period)
+        main_0_28_col = COL_TEMPLATE_FORMAT.format(
+            a=main_token, start=0, end=first_period
+        )
+        main_28_56_col = COL_TEMPLATE_FORMAT.format(
+            a=main_token, start=first_period, end=second_period
+        )
 
         post_agg_2 += [
             pl.sum_horizontal([pl.col(c) for c in cols_main_0_28]).alias(main_0_28_col),
-            pl.sum_horizontal([pl.col(c) for c in cols_main_28_56]).alias(main_28_56_col),
+            pl.sum_horizontal([pl.col(c) for c in cols_main_28_56]).alias(
+                main_28_56_col
+            ),
         ]
 
         for app in apps:
             columns = self._columns_within_window(
-                col_registry, end_at_days=sum_to_limit_in_days, token_filter=app)
+                col_registry, end_at_days=sum_to_limit_in_days, token_filter=app
+            )
 
-            column_name_0_56 = COL_TEMPLATE_FORMAT.format(a=app, start=0, end=sum_to_limit_in_days)
-            prop_column_name_0_56 = PROP_COL_TEMPLATE.format(a=app, start=0, end=sum_to_limit_in_days)
+            column_name_0_56 = COL_TEMPLATE_FORMAT.format(
+                a=app, start=0, end=sum_to_limit_in_days
+            )
+            prop_column_name_0_56 = PROP_COL_TEMPLATE.format(
+                a=app, start=0, end=sum_to_limit_in_days
+            )
 
             post_agg_2 += [
                 pl.sum_horizontal([pl.col(c) for c in columns]).alias(column_name_0_56)
@@ -584,33 +706,50 @@ class DataProcessor():
             # fill_nan(0): an inactive window gives 0/0, read as zero share of that app
             post_agg_3 += [
                 (pl.col(column_name_0_56) / pl.col(total_app_col_name_0_56))
-                .alias(prop_column_name_0_56).fill_nan(0)
+                .alias(prop_column_name_0_56)
+                .fill_nan(0)
             ]
 
-        prop_main_0_28_col  = PROP_COL_TEMPLATE.format(a=main_token, start=0,            end=first_period)
-        prop_main_28_56_col = PROP_COL_TEMPLATE.format(a=main_token, start=first_period, end=second_period)
-        prop_main_0_56_col  = PROP_COL_TEMPLATE.format(a=main_token, start=0,            end=second_period)
-        main_drift_col      = DRIFT_COL_TEMPLATE.format(a=main_token, r0=0, r1=first_period, r2=second_period)
+        prop_main_0_28_col = PROP_COL_TEMPLATE.format(
+            a=main_token, start=0, end=first_period
+        )
+        prop_main_28_56_col = PROP_COL_TEMPLATE.format(
+            a=main_token, start=first_period, end=second_period
+        )
+        prop_main_0_56_col = PROP_COL_TEMPLATE.format(
+            a=main_token, start=0, end=second_period
+        )
+        main_drift_col = DRIFT_COL_TEMPLATE.format(
+            a=main_token, r0=0, r1=first_period, r2=second_period
+        )
 
         post_agg_3 += [
-            (pl.col(main_0_28_col)  / pl.col(total_app_0_28_col_name)).alias(prop_main_0_28_col).fill_nan(0),
-            (pl.col(main_28_56_col) / pl.col(total_app_28_56_col_name)).alias(prop_main_28_56_col).fill_nan(0),
+            (pl.col(main_0_28_col) / pl.col(total_app_0_28_col_name))
+            .alias(prop_main_0_28_col)
+            .fill_nan(0),
+            (pl.col(main_28_56_col) / pl.col(total_app_28_56_col_name))
+            .alias(prop_main_28_56_col)
+            .fill_nan(0),
         ]
 
         # Drift sits in its own pass because it consumes the two windowed proportions built just above
         post_agg_4: list = [
-            (pl.col(prop_main_0_28_col) - pl.col(prop_main_28_56_col)).alias(main_drift_col)
+            (pl.col(prop_main_0_28_col) - pl.col(prop_main_28_56_col)).alias(
+                main_drift_col
+            )
         ]
 
         column_names_to_keep += [prop_main_0_56_col, main_drift_col]
 
         return agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, column_names_to_keep
 
-    def _generate_behaviour_features_aggregation(self,
-                                    lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
-                                    interval_in_days: int = INTERVAL_IN_DAYS,
-                                    first_period: int = FIRST_PERIOD_IN_DAYS,
-                                    second_period: int = SECOND_PERIOD_IN_DAYS) -> tuple[list, ...]:
+    def _generate_behaviour_features_aggregation(
+        self,
+        lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+        interval_in_days: int = INTERVAL_IN_DAYS,
+        first_period: int = FIRST_PERIOD_IN_DAYS,
+        second_period: int = SECOND_PERIOD_IN_DAYS,
+    ) -> tuple[list, ...]:
         """
         Builds volume, recency, and engagement-trend features.
 
@@ -629,137 +768,178 @@ class DataProcessor():
         post_agg_4: list = []
         column_names_to_keep: list = []
 
-
-        session_base_col = COL_TEMPLATE_FORMAT.format(a=SESSIONS_TOKEN, start=0, end=interval_in_days)
-        action_base_col = COL_TEMPLATE_FORMAT.format(a=ACTIONS_TOKEN, start=0, end=interval_in_days)
+        session_base_col = COL_TEMPLATE_FORMAT.format(
+            a=SESSIONS_TOKEN, start=0, end=interval_in_days
+        )
+        action_base_col = COL_TEMPLATE_FORMAT.format(
+            a=ACTIONS_TOKEN, start=0, end=interval_in_days
+        )
 
         agg = [
-            pl.col(ACTIVITY_DATE_COL).filter(pl.col(ACTIVITY_DATE_COL)
-            .is_not_null())
+            pl.col(ACTIVITY_DATE_COL)
+            .filter(pl.col(ACTIVITY_DATE_COL).is_not_null())
             .max()
             .alias(LAST_ACTIVITY_DATE_COL),
-
             # Counting unique days, not rows, so multiple actions on one day count as a single session
-            pl.col(ACTIVITY_DATE_COL).filter(pl.col(ACTIVITY_DATE_COL)
-            .is_not_null())
+            pl.col(ACTIVITY_DATE_COL)
+            .filter(pl.col(ACTIVITY_DATE_COL).is_not_null())
             .n_unique()
             .alias(session_base_col),
-
-            pl.col(ACTIVITY_TYPE_COL).filter(pl.col(ACTIVITY_TYPE_COL) != NONE_ACTIVITY_VALUE)
+            pl.col(ACTIVITY_TYPE_COL)
+            .filter(pl.col(ACTIVITY_TYPE_COL) != NONE_ACTIVITY_VALUE)
             .count()
-            .alias(action_base_col)
-
+            .alias(action_base_col),
         ]
 
         post_agg_1 = [
             # Carrying the last activity date forward so empty intervals keep the most recent real date for recency
             pl.col(LAST_ACTIVITY_DATE_COL).forward_fill().over(USER_ID_COL),
             # Interval end is the recency reference point: how stale the user is by the close of the interval
-            (pl.col(INTERVAL_START_COL) + timedelta(days=interval_in_days)).alias(INTERVAL_END_COL)]
+            (pl.col(INTERVAL_START_COL) + timedelta(days=interval_in_days)).alias(
+                INTERVAL_END_COL
+            ),
+        ]
 
         session_lags, session_registry = self._build_lagged_columns(
-            {SESSIONS_TOKEN: session_base_col}, lookback_periods, interval_in_days, fill_value=0)
+            {SESSIONS_TOKEN: session_base_col},
+            lookback_periods,
+            interval_in_days,
+            fill_value=0,
+        )
         post_agg_1 += session_lags
 
         action_lags, action_registry = self._build_lagged_columns(
-            {ACTIONS_TOKEN: action_base_col}, lookback_periods, interval_in_days, fill_value=0)
+            {ACTIONS_TOKEN: action_base_col},
+            lookback_periods,
+            interval_in_days,
+            fill_value=0,
+        )
         post_agg_1 += action_lags
-
 
         # --- Sessions: recent vs prior window + drift ---
         columns_to_sum_recent_window_sessions = self._columns_within_window(
-            session_registry,
-            start_from_days=0,
-            end_at_days=first_period)
+            session_registry, start_from_days=0, end_at_days=first_period
+        )
 
         columns_to_sum_prior_window_sessions = self._columns_within_window(
-            session_registry,
-            start_from_days=first_period,
-            end_at_days=second_period)
+            session_registry, start_from_days=first_period, end_at_days=second_period
+        )
 
-        recent_window_session_col = COL_TEMPLATE_FORMAT.format(a=SESSIONS_TOKEN,
-                                                               start=0,
-                                                               end=first_period)
+        recent_window_session_col = COL_TEMPLATE_FORMAT.format(
+            a=SESSIONS_TOKEN, start=0, end=first_period
+        )
 
-        prior_window_session_col = COL_TEMPLATE_FORMAT.format(a=SESSIONS_TOKEN,
-                                                              start=first_period,
-                                                              end=second_period)
+        prior_window_session_col = COL_TEMPLATE_FORMAT.format(
+            a=SESSIONS_TOKEN, start=first_period, end=second_period
+        )
 
-        post_agg_2 += [pl.sum_horizontal([col for col in columns_to_sum_recent_window_sessions])
-                    .alias(recent_window_session_col),
-                    pl.sum_horizontal([col for col in columns_to_sum_prior_window_sessions])
-                    .alias(prior_window_session_col)]
+        post_agg_2 += [
+            pl.sum_horizontal(
+                [col for col in columns_to_sum_recent_window_sessions]
+            ).alias(recent_window_session_col),
+            pl.sum_horizontal(
+                [col for col in columns_to_sum_prior_window_sessions]
+            ).alias(prior_window_session_col),
+        ]
 
         # Casting to signed Int32: session counts are u32, so a falling drift would underflow to a large positive number
-        session_intensity_drift_col = INTENSITY_DRIFT_COL_TEMPLATE.format(a=SESSIONS_TOKEN, r0=0, r1=first_period, r2=second_period)
-        post_agg_3 += [(pl.col(recent_window_session_col).cast(pl.Int32) - pl.col(prior_window_session_col).cast(pl.Int32)).alias(session_intensity_drift_col)]
-
+        session_intensity_drift_col = INTENSITY_DRIFT_COL_TEMPLATE.format(
+            a=SESSIONS_TOKEN, r0=0, r1=first_period, r2=second_period
+        )
+        post_agg_3 += [
+            (
+                pl.col(recent_window_session_col).cast(pl.Int32)
+                - pl.col(prior_window_session_col).cast(pl.Int32)
+            ).alias(session_intensity_drift_col)
+        ]
 
         # --- Actions: recent vs prior window + drift ---
         columns_to_sum_recent_window_actions = self._columns_within_window(
-            action_registry,
-            start_from_days=0,
-            end_at_days=first_period)
+            action_registry, start_from_days=0, end_at_days=first_period
+        )
 
         columns_to_sum_prior_window_actions = self._columns_within_window(
-            action_registry,
-            start_from_days=first_period,
-            end_at_days=second_period)
+            action_registry, start_from_days=first_period, end_at_days=second_period
+        )
 
-        recent_window_action_col = COL_TEMPLATE_FORMAT.format(a=ACTIONS_TOKEN,
-                                                             start=0,
-                                                             end=first_period)
+        recent_window_action_col = COL_TEMPLATE_FORMAT.format(
+            a=ACTIONS_TOKEN, start=0, end=first_period
+        )
 
-        prior_window_action_col = COL_TEMPLATE_FORMAT.format(a=ACTIONS_TOKEN,
-                                                            start=first_period,
-                                                            end=second_period)
+        prior_window_action_col = COL_TEMPLATE_FORMAT.format(
+            a=ACTIONS_TOKEN, start=first_period, end=second_period
+        )
 
-        post_agg_2 += [pl.sum_horizontal([col for col in columns_to_sum_recent_window_actions])
-                    .alias(recent_window_action_col),
-                    pl.sum_horizontal([col for col in columns_to_sum_prior_window_actions])
-                    .alias(prior_window_action_col)]
+        post_agg_2 += [
+            pl.sum_horizontal(
+                [col for col in columns_to_sum_recent_window_actions]
+            ).alias(recent_window_action_col),
+            pl.sum_horizontal(
+                [col for col in columns_to_sum_prior_window_actions]
+            ).alias(prior_window_action_col),
+        ]
 
         # Casting to signed Int32 for the same underflow reason as the session drift
-        action_intensity_drift_col = INTENSITY_DRIFT_COL_TEMPLATE.format(a=ACTIONS_TOKEN, r0=0, r1=first_period, r2=second_period)
-        post_agg_3 += [(pl.col(recent_window_action_col).cast(pl.Int32) - pl.col(prior_window_action_col).cast(pl.Int32)).alias(action_intensity_drift_col)]
+        action_intensity_drift_col = INTENSITY_DRIFT_COL_TEMPLATE.format(
+            a=ACTIONS_TOKEN, r0=0, r1=first_period, r2=second_period
+        )
+        post_agg_3 += [
+            (
+                pl.col(recent_window_action_col).cast(pl.Int32)
+                - pl.col(prior_window_action_col).cast(pl.Int32)
+            ).alias(action_intensity_drift_col)
+        ]
 
-
-        post_agg_2 += [(pl.col(INTERVAL_END_COL) - pl.col(LAST_ACTIVITY_DATE_COL)).dt.total_days().alias(RECENCY_COL)]
+        post_agg_2 += [
+            (pl.col(INTERVAL_END_COL) - pl.col(LAST_ACTIVITY_DATE_COL))
+            .dt.total_days()
+            .alias(RECENCY_COL)
+        ]
 
         # Actions per session  (depth) to decouple colinearity between session and action counts
-        actions_per_session_recent = ACTION_PER_SESSION_COL_TEMPLATE.format(start  = 0,            end=first_period)
-        actions_per_session_prior = ACTION_PER_SESSION_COL_TEMPLATE.format( start  = first_period, end=second_period)
-        action_per_session_drift = INTENSITY_DRIFT_COL_TEMPLATE.format(a="actions_per_session", r0=0, r1=first_period, r2=second_period)
+        actions_per_session_recent = ACTION_PER_SESSION_COL_TEMPLATE.format(
+            start=0, end=first_period
+        )
+        actions_per_session_prior = ACTION_PER_SESSION_COL_TEMPLATE.format(
+            start=first_period, end=second_period
+        )
+        action_per_session_drift = INTENSITY_DRIFT_COL_TEMPLATE.format(
+            a="actions_per_session", r0=0, r1=first_period, r2=second_period
+        )
 
-        post_agg_3 += [(pl.col(recent_window_action_col) / pl.col(recent_window_session_col))
-                       .fill_nan(0)
-                       .alias(actions_per_session_recent),
-                       (pl.col(prior_window_action_col) / pl.col(prior_window_session_col)).
-                       fill_nan(0)
-                       .alias(actions_per_session_prior)]
-        
-        post_agg_4 += [(pl.col(actions_per_session_recent) - pl.col(actions_per_session_prior)).alias(action_per_session_drift)]
+        post_agg_3 += [
+            (pl.col(recent_window_action_col) / pl.col(recent_window_session_col))
+            .fill_nan(0)
+            .alias(actions_per_session_recent),
+            (pl.col(prior_window_action_col) / pl.col(prior_window_session_col))
+            .fill_nan(0)
+            .alias(actions_per_session_prior),
+        ]
+
+        post_agg_4 += [
+            (
+                pl.col(actions_per_session_recent) - pl.col(actions_per_session_prior)
+            ).alias(action_per_session_drift)
+        ]
 
         column_names_to_keep += [
-            recent_window_session_col, # Volume
-            session_intensity_drift_col, # Volume drift
-            actions_per_session_recent, # Depth
-            action_per_session_drift, # Depth drift
+            recent_window_session_col,  # Volume
+            session_intensity_drift_col,  # Volume drift
+            actions_per_session_recent,  # Depth
+            action_per_session_drift,  # Depth drift
             RECENCY_COL,
-            INTERVAL_END_COL]
-
+            INTERVAL_END_COL,
+        ]
 
         return agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, column_names_to_keep
 
-    def _generate_churn_triggered_features_agg(self)-> tuple[list,...]:
-        
+    def _generate_churn_triggered_features_agg(self) -> tuple[list, ...]:
+
         agg: list = []
         post_agg_1: list = []
         column_names_to_keep: list = []
 
-
         agg += [pl.col(CHURN_TRIGGERED_COL).max()]
-
 
         # First-interval churners can survive the upstream span filter.
         # This keeps their label on the first interval instead of shifting it into a null.
@@ -767,38 +947,57 @@ class DataProcessor():
             pl.col(CHURN_TRIGGERED_COL)
             # Even though churn is triggered in the last period, the feature values
             # must be taken from the previous period (shifting for correct assignment)
-            .shift(-1) # Depends on the prior sort, won't work if the dataset isn't correctly sorted
+            .shift(
+                -1
+            )  # Depends on the prior sort, won't work if the dataset isn't correctly sorted
             .over(USER_ID_COL)
-            .fill_null(False) # This does not matter as much because the last row will be removed either way (incomplete intervals)
-            .alias(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)]
+            .fill_null(
+                False
+            )  # This does not matter as much because the last row will be removed either way (incomplete intervals)
+            .alias(CHURN_TRIGGERED_SHIFTED_COLUMN_NAME)
+        ]
 
-
-        
         column_names_to_keep += [CHURN_TRIGGERED_SHIFTED_COLUMN_NAME]
         return agg, post_agg_1, column_names_to_keep
 
-    def _generate_usage_gap_features_agg(self,
-                                    lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
-                                    interval_in_days: int = INTERVAL_IN_DAYS,
-                                    first_period: int = FIRST_PERIOD_IN_DAYS,
-                                    second_period: int = SECOND_PERIOD_IN_DAYS) -> tuple[list, ...]:
+    def _generate_usage_gap_features_agg(
+        self,
+        lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+        interval_in_days: int = INTERVAL_IN_DAYS,
+        first_period: int = FIRST_PERIOD_IN_DAYS,
+        second_period: int = SECOND_PERIOD_IN_DAYS,
+    ) -> tuple[list, ...]:
         agg: list = []
         post_agg_1: list = []
         post_agg_2: list = []
         post_agg_3: list = []
         post_agg_4: list = []
-        post_agg_5: list = [] 
+        post_agg_5: list = []
         column_names_to_keep: list = []
 
-        dates_list_base_col = COL_TEMPLATE_FORMAT.format(a=DATES_LIST_TOKEN, start=0, end=interval_in_days)
-        dates_list_entire_lookback = COL_TEMPLATE_FORMAT.format(a=DATES_LIST_TOKEN, start=0, end=second_period)
+        dates_list_base_col = COL_TEMPLATE_FORMAT.format(
+            a=DATES_LIST_TOKEN, start=0, end=interval_in_days
+        )
+        dates_list_entire_lookback = COL_TEMPLATE_FORMAT.format(
+            a=DATES_LIST_TOKEN, start=0, end=second_period
+        )
 
         # Distinct sorted list of active days inside each interval, so multiple actions on one day count once
-        agg += [pl.col(ACTIVITY_DATE_COL).dt.date().unique().sort().alias(dates_list_base_col)]
+        agg += [
+            pl.col(ACTIVITY_DATE_COL)
+            .dt.date()
+            .unique()
+            .sort()
+            .alias(dates_list_base_col)
+        ]
         post_agg_1 += [pl.col(dates_list_base_col).list.drop_nulls()]
 
         dates_list_lags, list_date_lags_registry = self._build_lagged_columns(
-            {DATES_LIST_TOKEN: dates_list_base_col}, lookback_periods, interval_in_days, fill_value=[])
+            {DATES_LIST_TOKEN: dates_list_base_col},
+            lookback_periods,
+            interval_in_days,
+            fill_value=[],
+        )
 
         post_agg_2 += dates_list_lags
         # Sorting after concat so gaps come out positive; concat_list preserves list order, not date order
@@ -808,9 +1007,15 @@ class DataProcessor():
             .alias(dates_list_entire_lookback)
         ]
 
-        mean_gap_col = COL_TEMPLATE_FORMAT.replace("n_","").format(a=MEAN_GAP_COLUMN_NAME, start=0, end=second_period)
-        sd_gap_col   = COL_TEMPLATE_FORMAT.replace("n_","").format(a=SD_GAP_COLUMN_NAME,   start=0, end=second_period)
-        cv_gap_col   = COL_TEMPLATE_FORMAT.replace("n_","").format(a=CV_GAP_COLUMN_NAME,   start=0, end=second_period)
+        mean_gap_col = COL_TEMPLATE_FORMAT.replace("n_", "").format(
+            a=MEAN_GAP_COLUMN_NAME, start=0, end=second_period
+        )
+        sd_gap_col = COL_TEMPLATE_FORMAT.replace("n_", "").format(
+            a=SD_GAP_COLUMN_NAME, start=0, end=second_period
+        )
+        cv_gap_col = COL_TEMPLATE_FORMAT.replace("n_", "").format(
+            a=CV_GAP_COLUMN_NAME, start=0, end=second_period
+        )
 
         # Gaps between consecutive active days (in days); first element of diff is null and dropped
         gaps_expr = (
@@ -825,12 +1030,13 @@ class DataProcessor():
         post_agg_4 += [gaps_expr.list.std().fill_null(0).alias(sd_gap_col)]
 
         # No-activity flag: <= 1 date in the window means no gap can be computed
-        activity_flag_col = COL_TEMPLATE_FORMAT.replace("n_","").format(a=ACTIVITY_FLAG_COLUMN_NAME,start=0, end=second_period)
+        activity_flag_col = COL_TEMPLATE_FORMAT.replace("n_", "").format(
+            a=ACTIVITY_FLAG_COLUMN_NAME, start=0, end=second_period
+        )
         post_agg_4 += [
             (pl.col(dates_list_entire_lookback).list.len() > 1).alias(activity_flag_col)
         ]
 
-    
         post_agg_5 += [
             pl.when(pl.col(mean_gap_col) > 0)
             .then(pl.col(sd_gap_col) / pl.col(mean_gap_col))
@@ -838,31 +1044,57 @@ class DataProcessor():
             .fill_null(0)
             .alias(cv_gap_col)
         ]
-        
 
-        column_names_to_keep += [activity_flag_col, cv_gap_col, mean_gap_col, sd_gap_col]
+        column_names_to_keep += [
+            activity_flag_col,
+            cv_gap_col,
+            mean_gap_col,
+            sd_gap_col,
+        ]
 
-        return (agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, post_agg_5, column_names_to_keep)
+        return (
+            agg,
+            post_agg_1,
+            post_agg_2,
+            post_agg_3,
+            post_agg_4,
+            post_agg_5,
+            column_names_to_keep,
+        )
 
     def _transform_intervals_to_start_stop(self):
-        
+
         post_agg_1: list = []
         post_agg_2: list = []
-        
-        post_agg_1 = [(pl.col(INTERVAL_START_COL) - pl.col(INTERVAL_START_COL).min().over(USER_ID_COL)).dt.total_days().alias(INTERVAL_START_COL)]
-        post_agg_2 = [pl.col(INTERVAL_START_COL).shift(-1).over(USER_ID_COL).alias(INTERVAL_END_COL)]
-      
+
+        post_agg_1 = [
+            (
+                pl.col(INTERVAL_START_COL)
+                - pl.col(INTERVAL_START_COL).min().over(USER_ID_COL)
+            )
+            .dt.total_days()
+            .alias(INTERVAL_START_COL)
+        ]
+        post_agg_2 = [
+            pl.col(INTERVAL_START_COL)
+            .shift(-1)
+            .over(USER_ID_COL)
+            .alias(INTERVAL_END_COL)
+        ]
+
         return post_agg_1, post_agg_2
 
-    def apply_feature_engineering(self,
-                                   df: pl.DataFrame,
-                                   churn_adjusted_date_col_name: str | None = None,
-                                   interval_in_days: int = INTERVAL_IN_DAYS,
-                                   lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
-                                   sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
-                                   first_period: int = FIRST_PERIOD_IN_DAYS,
-                                   second_period: int = SECOND_PERIOD_IN_DAYS,
-                                   save_file_to: Path | None = None) -> pl.DataFrame:
+    def apply_feature_engineering(
+        self,
+        df: pl.DataFrame,
+        churn_adjusted_date_col_name: str | None = None,
+        interval_in_days: int = INTERVAL_IN_DAYS,
+        lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+        sum_to_limit_in_days: int = SUM_TO_LIMIT_IN_DAYS,
+        first_period: int = FIRST_PERIOD_IN_DAYS,
+        second_period: int = SECOND_PERIOD_IN_DAYS,
+        save_file_to: Path | None = None,
+    ) -> pl.DataFrame:
         """
         Runs the full feature-engineering pipeline and returns the per-interval frame.
 
@@ -873,35 +1105,38 @@ class DataProcessor():
         """
 
         imputer_object = Imputer(df)
-        churn_adjusted_date_col_name = churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
+        churn_adjusted_date_col_name = (
+            churn_adjusted_date_col_name or CHURN_ADJUSTED_DATE_COL
+        )
 
         try:
-            # Accepting the mild leakge for imputing on the whole dataset (only 412 missing vehicle start year values)
+            # Accepting the documented mild leakage from whole-dataset imputation.
             df, _, _, _ = imputer_object.KNN_impute_vehicle_start_year(df)
 
-
             group_and_sort_by_columns = [USER_ID_COL, INTERVAL_START_COL]
-            df, vehicle_make_column_names = self._prepare_df(df, churn_adjusted_date_col_name)
-            df_with_intervals = self._generate_intervals(df,
-                                                         ACTIVITY_DATE_COL, #NOTE: Temporary fix, should be as a variable 
-                                                         interval_in_days,
-                                                         vehicle_make_column_names)
-
-         
-
-            # Flagging the first occurrence of each distinct vehicle per user-day so the
-            # mean-age / still-in-production aggregations count each vehicle once.
-            df_with_intervals = df_with_intervals.with_columns(
-                pl.col(VEHICLE_AGE_COLUMN_NAME)
-                .is_first_distinct()
-
-                # Not over CHURND_ADJUSTED_DATE
-                .over([USER_ID_COL, ACTIVITY_DATE_COL])
-                .alias(FIRST_DISTINCT_COLUMN_NAME)
+            df, vehicle_make_column_names = self._prepare_df(
+                df, churn_adjusted_date_col_name
+            )
+            df_with_intervals = self._generate_intervals(
+                df,
+                activity_date_col_name=ACTIVITY_DATE_COL,
+                interval=interval_in_days,
+                vehicle_make_column_names=vehicle_make_column_names,
+                churn_adjusted_date_col_name=churn_adjusted_date_col_name,
             )
 
-        
-        
+            # Flag each vehicle only when it first appears in a user's history. This
+            # makes cumulative garage features vehicle-weighted rather than activity-
+            # weighted and distinguishes vehicles that happen to have the same age.
+            df_with_intervals = df_with_intervals.sort(
+                [USER_ID_COL, ACTIVITY_DATE_COL], nulls_last=True
+            ).with_columns(
+                (
+                    (pl.col(VEHICLE_ID_COL) != UNKNOWN_VALUE)
+                    & pl.col(VEHICLE_ID_COL).is_first_distinct().over(USER_ID_COL)
+                ).alias(FIRST_DISTINCT_COLUMN_NAME)
+            )
+
             agg: list = []
             post_agg_1: list = []
             post_agg_2: list = []
@@ -910,64 +1145,115 @@ class DataProcessor():
             post_agg_5: list = []
             column_names_to_keep: list = []
 
-            agg_af, post_agg_1_af, post_agg_2_af, post_agg_3_af, column_names_to_keep_af = \
-                self._generate_activity_feature_aggregation(
-                    lookback_periods,
-                    interval_in_days)
-
-            agg_app, post_agg_1_app, post_agg_2_app, post_agg_3_app, post_agg_4_app, column_names_to_keep_app = \
-                self._generate_app_column_features_aggregation(
-                    lookback_periods,
-                    interval_in_days,
-                    sum_to_limit_in_days,
-                    first_period,
-                    second_period
-                    )
-            agg_b, post_agg_1_b, post_agg_2_b, post_agg_3_b,  post_agg_4_b, column_names_to_keep_b  = \
-                self._generate_behaviour_features_aggregation(
-                    lookback_periods,
-                    interval_in_days,
-                    first_period,
-                    second_period)
-
-
-            agg_vehicle, post_agg_1_vehicle, post_agg_2_vehicle,post_agg_3_vehicle, column_names_to_keep_vehicle = \
-                self._generate_vehicle_characteristics_features_aggregation(
-                    vehicle_make_column_names,
-                    interval_in_days)
-            
-            agg_churn, post_agg_1_churn, column_names_to_keep_churn = \
-                self._generate_churn_triggered_features_agg()
-
-            post_agg_1_start_stop, post_agg_2_start_stop = self._transform_intervals_to_start_stop()
-
-            agg_gap, post_agg_1_gap, post_agg_2_gap, post_agg_3_gap, post_agg_4_gap, post_agg_5_gap, column_names_to_keep_gap = self._generate_usage_gap_features_agg()
-         
-            
-            column_names_to_keep += [USER_ID_COL, INTERVAL_START_COL]
-            column_names_to_keep += (
-                column_names_to_keep_af +
-                column_names_to_keep_app +
-                column_names_to_keep_b +
-                column_names_to_keep_vehicle +
-                column_names_to_keep_churn +
-                column_names_to_keep_gap
+            (
+                agg_af,
+                post_agg_1_af,
+                post_agg_2_af,
+                post_agg_3_af,
+                column_names_to_keep_af,
+            ) = self._generate_activity_feature_aggregation(
+                lookback_periods, interval_in_days, sum_to_limit_in_days
             )
 
+            (
+                agg_app,
+                post_agg_1_app,
+                post_agg_2_app,
+                post_agg_3_app,
+                post_agg_4_app,
+                column_names_to_keep_app,
+            ) = self._generate_app_column_features_aggregation(
+                lookback_periods,
+                interval_in_days,
+                sum_to_limit_in_days,
+                first_period,
+                second_period,
+            )
+            (
+                agg_b,
+                post_agg_1_b,
+                post_agg_2_b,
+                post_agg_3_b,
+                post_agg_4_b,
+                column_names_to_keep_b,
+            ) = self._generate_behaviour_features_aggregation(
+                lookback_periods, interval_in_days, first_period, second_period
+            )
 
+            (
+                agg_vehicle,
+                post_agg_1_vehicle,
+                post_agg_2_vehicle,
+                post_agg_3_vehicle,
+                column_names_to_keep_vehicle,
+            ) = self._generate_vehicle_characteristics_features_aggregation(
+                vehicle_make_column_names, interval_in_days
+            )
+
+            agg_churn, post_agg_1_churn, column_names_to_keep_churn = (
+                self._generate_churn_triggered_features_agg()
+            )
+
+            post_agg_1_start_stop, post_agg_2_start_stop = (
+                self._transform_intervals_to_start_stop()
+            )
+
+            (
+                agg_gap,
+                post_agg_1_gap,
+                post_agg_2_gap,
+                post_agg_3_gap,
+                post_agg_4_gap,
+                post_agg_5_gap,
+                column_names_to_keep_gap,
+            ) = self._generate_usage_gap_features_agg(
+                lookback_periods,
+                interval_in_days,
+                first_period,
+                second_period,
+            )
+
+            column_names_to_keep += [USER_ID_COL, INTERVAL_START_COL]
+            column_names_to_keep += (
+                column_names_to_keep_af
+                + column_names_to_keep_app
+                + column_names_to_keep_b
+                + column_names_to_keep_vehicle
+                + column_names_to_keep_churn
+                + column_names_to_keep_gap
+            )
 
             agg += agg_af + agg_app + agg_b + agg_vehicle + agg_churn + agg_gap
-            post_agg_1 += post_agg_1_af  + post_agg_1_app + post_agg_1_b + post_agg_1_vehicle + post_agg_1_churn + post_agg_1_start_stop + post_agg_1_gap
-            post_agg_2 += post_agg_2_af  + post_agg_2_app + post_agg_2_b + post_agg_2_vehicle + post_agg_2_start_stop + post_agg_2_gap
-            post_agg_3 += post_agg_3_af  + post_agg_3_app + post_agg_3_b + post_agg_3_vehicle + post_agg_3_gap
+            post_agg_1 += (
+                post_agg_1_af
+                + post_agg_1_app
+                + post_agg_1_b
+                + post_agg_1_vehicle
+                + post_agg_1_churn
+                + post_agg_1_start_stop
+                + post_agg_1_gap
+            )
+            post_agg_2 += (
+                post_agg_2_af
+                + post_agg_2_app
+                + post_agg_2_b
+                + post_agg_2_vehicle
+                + post_agg_2_start_stop
+                + post_agg_2_gap
+            )
+            post_agg_3 += (
+                post_agg_3_af
+                + post_agg_3_app
+                + post_agg_3_b
+                + post_agg_3_vehicle
+                + post_agg_3_gap
+            )
             post_agg_4 += post_agg_4_app + post_agg_4_gap + post_agg_4_b
             post_agg_5 += post_agg_5_gap
-            
-       
 
             # Sorting after agg: group_by does not preserve order, but post aggregation require chronological rows per user
-            df = (df_with_intervals
-                .group_by(group_and_sort_by_columns)
+            df = (
+                df_with_intervals.group_by(group_and_sort_by_columns)
                 .agg(agg)
                 .sort(group_and_sort_by_columns)
                 .with_columns(post_agg_1)
@@ -977,34 +1263,40 @@ class DataProcessor():
                 .with_columns(post_agg_5)
             )
 
-
             # Drop each user's final interval: it is incomplete (no full interval of activity
             # observed) and its real churn label has already been shifted back onto the prior row
 
-            df = (df
-                .with_columns(
-                    (pl.col(INTERVAL_START_COL) == pl.col(INTERVAL_START_COL).max().over(USER_ID_COL))
-                    .alias("_is_last_interval")
+            df = (
+                df.with_columns(
+                    (
+                        pl.col(INTERVAL_START_COL)
+                        == pl.col(INTERVAL_START_COL).max().over(USER_ID_COL)
+                    ).alias("_is_last_interval")
                 )
                 # Drop the incomplete final interval
                 .filter(~pl.col("_is_last_interval"))
                 .drop(["_is_last_interval"])
                 .select(column_names_to_keep)
             )
-      
+
             # Just for better readability when examining the data
-            initial_column_ordering = [USER_ID_COL, INTERVAL_START_COL, INTERVAL_END_COL]
-            df = df.select(initial_column_ordering + [c for c in df.columns if c not in initial_column_ordering])
-           
+            initial_column_ordering = [
+                USER_ID_COL,
+                INTERVAL_START_COL,
+                INTERVAL_END_COL,
+            ]
+            df = df.select(
+                initial_column_ordering
+                + [c for c in df.columns if c not in initial_column_ordering]
+            )
+
             if save_file_to:
-                df.write_csv(save_file_to)     
+                df.write_csv(save_file_to)
 
             return df
-            
-        except Exception as e:
-            print(f"Unexpected error has occurred: {e}")
-            return pl.DataFrame()
 
+        except Exception as e:
+            raise RuntimeError("Feature engineering failed.") from e
 
 
 # from src.constants import paths_to_files_and_folders as const
