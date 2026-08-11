@@ -11,6 +11,7 @@ from .constants.columns import (
     CHURN_ADJUSTED_DATE_COL,
     CHURN_TRIGGERED_COL,
     INTERVAL_START_COL,
+    REGISTERED_DATE_COL,
     STILL_IN_PRODUCTION_COL,
     USER_ID_COL,
     VEHICLE_END_YEAR_COL,
@@ -55,12 +56,15 @@ CUMULATIVE_COUNT_COL_TEMPLATE: str = "cumulative_count_{name}"
 DRIFT_COL_TEMPLATE: str = "prop_{a}_drift_{r0}_{r1}_vs_{r1}_{r2}"
 INTENSITY_DRIFT_COL_TEMPLATE: str = "{a}_intensity_drift_{r0}_{r1}_vs_{r1}_{r2}_days"
 ACTION_PER_SESSION_COL_TEMPLATE: str = "actions_per_session_{start}_{end}_days"
+WEEKEND_SHARE_COL_TEMPLATE: str = "weekend_share_{start}_{end}_days"
 
 # ============================================================
 #  Aggregation tokens (the {a}/{name} filled into the templates)
 # ============================================================
 SESSIONS_TOKEN: str = "sessions"
 ACTIONS_TOKEN: str = "actions"
+WEEKEND_ACTIONS_TOKEN: str = "weekend_actions"
+NEW_VEHICLES_TOKEN: str = "new_vehicles"
 STILL_IN_PRODUCTION_TOKEN: str = "still_in_production"
 TOTAL_CARS_TOKEN: str = "total_cars"
 TOTAL_APP_TOKEN: str = "total_app"
@@ -74,12 +78,24 @@ START_DATE_COL: str = "start_date"
 END_DATE_COL: str = "end_date"
 LAST_ACTIVITY_DATE_COL: str = "last_activity_date"
 RECENCY_COL: str = "recency"
+ACCOUNT_TENURE_COL: str = "account_tenure_days"
+FIRST_ACTIVITY_DATE_COL: str = "first_activity_date"
+ONBOARDING_DELAY_COL: str = "onboarding_delay_days"
+USAGE_CONCENTRATION_COL: str = "usage_concentration"
+MAX_VEHICLE_ACTIONS_COL: str = "max_vehicle_actions_in_interval"
 PROP_IN_PROD_COL: str = "prop_in_prod"
 CUMULATIVE_COUNT_TOTAL_COL: str = "cumulative_count_total"
 VEHICLE_AGE_COLUMN_NAME: str = "vehicle_age"
 VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME: str = "vehicle_mean_age_overall"
 VEHICLE_AGE_SUM_COLUMN_NAME: str = "vehicle_age_sum_in_an_interval"
+VEHICLE_AGE_SQ_SUM_COLUMN_NAME: str = "vehicle_age_sq_sum_in_an_interval"
+VEHICLE_AGE_SD_COLUMN_NAME: str = "vehicle_age_sd_overall"
+MILEAGE_ORDINAL_COL: str = "vehicle_mileage_ordinal"
+MILEAGE_ORDINAL_SUM_COLUMN_NAME: str = "vehicle_mileage_ordinal_sum_in_an_interval"
+VEHICLE_MEAN_MILEAGE_ORDINAL_COL: str = "vehicle_mean_mileage_ordinal"
 FIRST_DISTINCT_COLUMN_NAME: str = "first_distinct"
+LAST_NEW_VEHICLE_DATE_COL: str = "last_new_vehicle_date"
+DAYS_SINCE_LAST_NEW_VEHICLE_COL: str = "days_since_last_new_vehicle"
 ACTIVITY_FLAG_COLUMN_NAME: str = "active_flag"
 MEAN_GAP_COLUMN_NAME = "mean_gap"
 SD_GAP_COLUMN_NAME = "sd_gap"
@@ -124,6 +140,16 @@ class DataProcessor:
             .alias(activity_date_col_name)
         ).sort(by=[USER_ID_COL, ACTIVITY_DATE_COL])
 
+        # Account registration date is optional; parse it when the upstream cleaning
+        # step attached it so account-tenure features can be derived downstream
+        if REGISTERED_DATE_COL in df.columns:
+            df = df.with_columns(
+                pl.col(REGISTERED_DATE_COL)
+                .str.to_datetime(time_unit="us", time_zone="UTC")
+                .dt.date()
+                .alias(REGISTERED_DATE_COL)
+            )
+
         # Collapsing raw categories into their groupings so counts aggregate at the group level, not the raw-value level
         df = df.with_columns(
             pl.col(ACTIVITY_TYPE_COL)
@@ -148,6 +174,17 @@ class DataProcessor:
             )
             .clip(lower_bound=0)
             .alias(VEHICLE_AGE_COLUMN_NAME)
+        )
+
+        # Mileage bucket lower edge (same parse as Imputer._create_order_mileage_buckets).
+        # Used as an ordinal scale for garage-level mileage features; "unknown" → null.
+        df = df.with_columns(
+            pl.col(VEHICLE_MILEAGE_COL)
+            .str.replace_all(r"[ >]", "")
+            .str.split("-")
+            .list.first()
+            .cast(pl.Int64, strict=False)
+            .alias(MILEAGE_ORDINAL_COL)
         )
 
         # Setting aside vehicle make column to concatenate it later (needed for mean age feature aggregation computations)
@@ -452,16 +489,28 @@ class DataProcessor:
         return agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep
 
     def _generate_vehicle_characteristics_features_aggregation(
-        self, vehicle_make_col_names: list, interval_in_days: int = INTERVAL_IN_DAYS
+        self,
+        vehicle_make_col_names: list,
+        interval_in_days: int = INTERVAL_IN_DAYS,
+        lookback_periods: tuple[int, ...] = LOOKBACK_PERIODS,
+        first_period: int = FIRST_PERIOD_IN_DAYS,
     ) -> tuple[list, ...]:
         """
-        Builds make-portfolio features from the one-hot make columns.
+        Builds make-portfolio, garage-growth, and garage mileage features from
+        vehicle metadata.
 
         Counts accumulate cumulatively per user rather than resetting per interval:
         the set of makes a user has connected is a slow-moving characteristic of who
         they are, not a per-window behaviour. From the running counts it derives each
         make's overall share. Cumulative counts themselves are intermediates and are
         not kept.
+
+        Garage growth counts how many distinct vehicles first appeared in the recent
+        window (via first_distinct), signalling re-engagement through new connections.
+        Days since last new vehicle is the complementary recency of that event.
+        Mean mileage uses each bucket's lower edge (imputer ordering) averaged over
+        distinct vehicles seen so far. Age dispersion is the running population SD
+        of those same distinct-vehicle ages (0 when the garage has a single age).
 
         Returns:
             Tuple of (agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep).
@@ -488,22 +537,59 @@ class DataProcessor:
             pl.col(VEHICLE_AGE_COLUMN_NAME)
             .filter(valid_distinct_vehicle)
             .sum()
-            .alias(VEHICLE_AGE_SUM_COLUMN_NAME)
+            .alias(VEHICLE_AGE_SUM_COLUMN_NAME),
+            (pl.col(VEHICLE_AGE_COLUMN_NAME) ** 2)
+            .filter(valid_distinct_vehicle)
+            .sum()
+            .alias(VEHICLE_AGE_SQ_SUM_COLUMN_NAME),
         ]
 
-        # Weight by the number of newly observed vehicles in each interval. Averaging
-        # interval means would give sparse intervals the same weight as dense ones.
+        # Empty intervals contribute 0 to the running totals; any remaining null/NaN
+        # after the ratio (e.g. before the first observed vehicle) forward-fills from
+        # the previous interval rather than resetting to 0 mid-history.
         post_agg_1 += [
             (
-                pl.col(VEHICLE_AGE_SUM_COLUMN_NAME).cum_sum().over(USER_ID_COL)
-                / pl.col(total_car_count).cum_sum().over(USER_ID_COL)
+                pl.col(VEHICLE_AGE_SUM_COLUMN_NAME)
+                .fill_null(0)
+                .fill_nan(0)
+                .cum_sum()
+                .over(USER_ID_COL)
+                / pl.col(total_car_count).fill_null(0).cum_sum().over(USER_ID_COL)
             )
-            .fill_nan(0)
+            .fill_nan(None)
+            .forward_fill()
+            .over(USER_ID_COL)
             .fill_null(0)
             .alias(VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME)
         ]
 
-        column_names_to_keep += [VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME]
+        # Population SD: sqrt(E[x^2] - E[x]^2). Uses mean from post_agg_1, so this
+        # lands in post_agg_2. Clip under the root for floating-point noise.
+        post_agg_2 += [
+            (
+                (
+                    pl.col(VEHICLE_AGE_SQ_SUM_COLUMN_NAME)
+                    .fill_null(0)
+                    .fill_nan(0)
+                    .cum_sum()
+                    .over(USER_ID_COL)
+                    / pl.col(total_car_count).fill_null(0).cum_sum().over(USER_ID_COL)
+                )
+                - pl.col(VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME).pow(2)
+            )
+            .clip(lower_bound=0)
+            .sqrt()
+            .fill_nan(None)
+            .forward_fill()
+            .over(USER_ID_COL)
+            .fill_null(0)
+            .alias(VEHICLE_AGE_SD_COLUMN_NAME)
+        ]
+
+        column_names_to_keep += [
+            VEHICLE_MEAN_OVERALL_AGE_COLUMN_NAME,
+            VEHICLE_AGE_SD_COLUMN_NAME,
+        ]
 
         ##__STILL IN PRODUCTION PROPORTIONS___##
 
@@ -526,14 +612,87 @@ class DataProcessor:
 
         post_agg_1 += [
             (
-                pl.col(still_in_prod_count).cum_sum().over(USER_ID_COL)
-                / pl.col(total_car_count).cum_sum().over(USER_ID_COL)
+                pl.col(still_in_prod_count).fill_null(0).cum_sum().over(USER_ID_COL)
+                / pl.col(total_car_count).fill_null(0).cum_sum().over(USER_ID_COL)
             )
-            .fill_nan(0)
+            .fill_nan(None)
+            .forward_fill()
+            .over(USER_ID_COL)
+            .fill_null(0)
             .alias(PROP_IN_PROD_COL)
         ]
 
         column_names_to_keep += [PROP_IN_PROD_COL]
+
+        ##___MEAN MILEAGE (ordinal / bucket lower edge)___##
+        agg += [
+            pl.col(MILEAGE_ORDINAL_COL)
+            .filter(valid_distinct_vehicle)
+            .sum()
+            .alias(MILEAGE_ORDINAL_SUM_COLUMN_NAME)
+        ]
+        post_agg_1 += [
+            (
+                pl.col(MILEAGE_ORDINAL_SUM_COLUMN_NAME)
+                .fill_null(0)
+                .fill_nan(0)
+                .cum_sum()
+                .over(USER_ID_COL)
+                / pl.col(total_car_count).fill_null(0).cum_sum().over(USER_ID_COL)
+            )
+            .fill_nan(None)
+            .forward_fill()
+            .over(USER_ID_COL)
+            .fill_null(0)
+            .alias(VEHICLE_MEAN_MILEAGE_ORDINAL_COL)
+        ]
+        column_names_to_keep += [VEHICLE_MEAN_MILEAGE_ORDINAL_COL]
+
+        ##___GARAGE GROWTH (new vehicles in recent window)___##
+        # first_distinct is already False for unknown/empty-interval vehicle ids
+        new_vehicles_base_col = COL_TEMPLATE_FORMAT.format(
+            a=NEW_VEHICLES_TOKEN, start=0, end=interval_in_days
+        )
+        agg += [
+            pl.col(FIRST_DISTINCT_COLUMN_NAME).sum().alias(new_vehicles_base_col),
+            # Most recent activity date among first-seen vehicles in this interval
+            pl.col(ACTIVITY_DATE_COL)
+            .filter(pl.col(FIRST_DISTINCT_COLUMN_NAME))
+            .max()
+            .alias(LAST_NEW_VEHICLE_DATE_COL),
+        ]
+
+        new_vehicle_lags, new_vehicle_registry = self._build_lagged_columns(
+            {NEW_VEHICLES_TOKEN: new_vehicles_base_col},
+            lookback_periods,
+            interval_in_days,
+            fill_value=0,
+        )
+        post_agg_1 += new_vehicle_lags
+        post_agg_1 += [
+            # Carry the last garage-expansion date across empty / no-new-vehicle intervals
+            pl.col(LAST_NEW_VEHICLE_DATE_COL).forward_fill().over(USER_ID_COL)
+        ]
+
+        recent_new_vehicle_cols = self._columns_within_window(
+            new_vehicle_registry, start_from_days=0, end_at_days=first_period
+        )
+        recent_new_vehicles_col = COL_TEMPLATE_FORMAT.format(
+            a=NEW_VEHICLES_TOKEN, start=0, end=first_period
+        )
+        post_agg_2 += [
+            pl.sum_horizontal([col for col in recent_new_vehicle_cols]).alias(
+                recent_new_vehicles_col
+            ),
+            # Same reference point as recency / tenure (interval end)
+            (pl.col(INTERVAL_END_COL) - pl.col(LAST_NEW_VEHICLE_DATE_COL))
+            .dt.total_days()
+            .alias(DAYS_SINCE_LAST_NEW_VEHICLE_COL),
+        ]
+        column_names_to_keep += [
+            recent_new_vehicles_col,
+            DAYS_SINCE_LAST_NEW_VEHICLE_COL,
+        ]
 
         ##___MAKE PROPORTIONS___##
         for vehicle_make_col_name in vehicle_make_col_names:
@@ -757,15 +916,19 @@ class DataProcessor:
         second_period: int = SECOND_PERIOD_IN_DAYS,
     ) -> tuple[list, ...]:
         """
-        Builds volume, recency, and engagement-trend features.
+        Builds volume, recency, engagement-trend, and weekend-usage features.
 
         Sessions (distinct active days) and actions are counted per interval, lagged,
         and summed into recent and prior windows. Each yields a recent-window level
         plus a drift (recent minus prior) that signals whether engagement is rising
         or falling. Recency is days from the last activity to the interval end.
+        Weekend share is the fraction of recent-window actions that fell on Sat/Sun
+        (Polars weekday: Mon=1 … Sun=7), a hobbyist-vs-weekday usage signal.
+        Usage concentration is the share of the interval's actions on the single
+        most-used vehicle (1 = all on one car, lower = spread across the garage).
 
         Returns:
-            Tuple of (agg, post_agg_1, post_agg_2, post_agg_3, column_names_to_keep).
+            Tuple of (agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, column_names_to_keep).
         """
         agg: list = []
         post_agg_1: list = []
@@ -779,6 +942,9 @@ class DataProcessor:
         )
         action_base_col = COL_TEMPLATE_FORMAT.format(
             a=ACTIONS_TOKEN, start=0, end=interval_in_days
+        )
+        weekend_action_base_col = COL_TEMPLATE_FORMAT.format(
+            a=WEEKEND_ACTIONS_TOKEN, start=0, end=interval_in_days
         )
 
         agg = [
@@ -795,6 +961,24 @@ class DataProcessor:
             .filter(pl.col(ACTIVITY_TYPE_COL) != NONE_ACTIVITY_VALUE)
             .count()
             .alias(action_base_col),
+            # Weekend actions: Sat=6, Sun=7 under Polars ISO weekday numbering.
+            # Same activity filter as action_base_col so the share stays in [0, 1].
+            pl.col(ACTIVITY_DATE_COL)
+            .filter(
+                (pl.col(ACTIVITY_TYPE_COL) != NONE_ACTIVITY_VALUE)
+                & (pl.col(ACTIVITY_DATE_COL).dt.weekday() >= 6)
+            )
+            .count()
+            .alias(weekend_action_base_col),
+            # Actions on the single most-used vehicle this interval (unknown/empty excluded)
+            pl.col(VEHICLE_ID_COL)
+            .filter(
+                (pl.col(ACTIVITY_TYPE_COL) != NONE_ACTIVITY_VALUE)
+                & (pl.col(VEHICLE_ID_COL) != UNKNOWN_VALUE)
+            )
+            .unique_counts()
+            .max()
+            .alias(MAX_VEHICLE_ACTIONS_COL),
         ]
 
         post_agg_1 = [
@@ -804,6 +988,11 @@ class DataProcessor:
             (pl.col(INTERVAL_START_COL) + timedelta(days=interval_in_days)).alias(
                 INTERVAL_END_COL
             ),
+            # Current-interval concentration; empty intervals → 0
+            (pl.col(MAX_VEHICLE_ACTIONS_COL) / pl.col(action_base_col))
+            .fill_nan(0)
+            .fill_null(0)
+            .alias(USAGE_CONCENTRATION_COL),
         ]
 
         session_lags, session_registry = self._build_lagged_columns(
@@ -821,6 +1010,14 @@ class DataProcessor:
             fill_value=0,
         )
         post_agg_1 += action_lags
+
+        weekend_lags, weekend_registry = self._build_lagged_columns(
+            {WEEKEND_ACTIONS_TOKEN: weekend_action_base_col},
+            lookback_periods,
+            interval_in_days,
+            fill_value=0,
+        )
+        post_agg_1 += weekend_lags
 
         # --- Sessions: recent vs prior window + drift ---
         columns_to_sum_recent_window_sessions = self._columns_within_window(
@@ -896,6 +1093,31 @@ class DataProcessor:
             ).alias(action_intensity_drift_col)
         ]
 
+        # --- Weekend share over the recent window ---
+        columns_to_sum_recent_weekend_actions = self._columns_within_window(
+            weekend_registry, start_from_days=0, end_at_days=first_period
+        )
+        recent_window_weekend_action_col = COL_TEMPLATE_FORMAT.format(
+            a=WEEKEND_ACTIONS_TOKEN, start=0, end=first_period
+        )
+        weekend_share_col = WEEKEND_SHARE_COL_TEMPLATE.format(start=0, end=first_period)
+
+        post_agg_2 += [
+            pl.sum_horizontal(
+                [col for col in columns_to_sum_recent_weekend_actions]
+            ).alias(recent_window_weekend_action_col),
+        ]
+
+        post_agg_3 += [
+            (
+                pl.col(recent_window_weekend_action_col)
+                / pl.col(recent_window_action_col)
+            )
+            .fill_nan(0)
+            .fill_null(0)
+            .alias(weekend_share_col)
+        ]
+
         post_agg_2 += [
             (pl.col(INTERVAL_END_COL) - pl.col(LAST_ACTIVITY_DATE_COL))
             .dt.total_days()
@@ -935,9 +1157,55 @@ class DataProcessor:
             action_per_session_drift,  # Depth drift
             RECENCY_COL,
             INTERVAL_END_COL,
+            weekend_share_col,  # Weekend usage mix
+            USAGE_CONCENTRATION_COL,  # Max vehicle share within the interval
         ]
 
         return agg, post_agg_1, post_agg_2, post_agg_3, post_agg_4, column_names_to_keep
+
+    def _generate_account_tenure_features_agg(self) -> tuple[list, ...]:
+        """
+        Builds registration-based account features.
+
+        - Account tenure: days from registration to the interval end (grows over
+          the user's history; same reference point as recency).
+        - Onboarding delay: days from registration to the user's first activity
+          (constant per user). Distinguishes instant adopters from users who
+          register and stall before engaging.
+
+        Registration predates the first activity, and the interval grid starts at
+        the first activity, so a forward fill / user-level min carries these
+        constants into empty intervals.
+
+        Returns:
+            Tuple of (agg, post_agg_1, post_agg_2, column_names_to_keep).
+        """
+        agg: list = [
+            pl.col(REGISTERED_DATE_COL).drop_nulls().first(),
+            # Per-interval min; empty intervals stay null and are resolved in post_agg_1
+            pl.col(ACTIVITY_DATE_COL).drop_nulls().min().alias(FIRST_ACTIVITY_DATE_COL),
+        ]
+
+        post_agg_1: list = [
+            pl.col(REGISTERED_DATE_COL).forward_fill().over(USER_ID_COL),
+            # Broadcast the true first activity date to every interval for the user
+            pl.col(FIRST_ACTIVITY_DATE_COL).min().over(USER_ID_COL),
+        ]
+
+        post_agg_2: list = [
+            (pl.col(INTERVAL_END_COL) - pl.col(REGISTERED_DATE_COL))
+            .dt.total_days()
+            .clip(lower_bound=0)
+            .alias(ACCOUNT_TENURE_COL),
+            (pl.col(FIRST_ACTIVITY_DATE_COL) - pl.col(REGISTERED_DATE_COL))
+            .dt.total_days()
+            .clip(lower_bound=0)
+            .alias(ONBOARDING_DELAY_COL),
+        ]
+
+        column_names_to_keep: list = [ACCOUNT_TENURE_COL, ONBOARDING_DELAY_COL]
+
+        return agg, post_agg_1, post_agg_2, column_names_to_keep
 
     def _generate_churn_triggered_features_agg(self) -> tuple[list, ...]:
 
@@ -1193,12 +1461,29 @@ class DataProcessor:
                 post_agg_3_vehicle,
                 column_names_to_keep_vehicle,
             ) = self._generate_vehicle_characteristics_features_aggregation(
-                vehicle_make_column_names, interval_in_days
+                vehicle_make_column_names,
+                interval_in_days,
+                lookback_periods,
+                first_period,
             )
 
             agg_churn, post_agg_1_churn, column_names_to_keep_churn = (
                 self._generate_churn_triggered_features_agg()
             )
+
+            # Account-tenure features are only produced when the upstream cleaning step
+            # attached registration dates, so existing datasets remain compatible
+            agg_tenure: list = []
+            post_agg_1_tenure: list = []
+            post_agg_2_tenure: list = []
+            column_names_to_keep_tenure: list = []
+            if REGISTERED_DATE_COL in df_with_intervals.columns:
+                (
+                    agg_tenure,
+                    post_agg_1_tenure,
+                    post_agg_2_tenure,
+                    column_names_to_keep_tenure,
+                ) = self._generate_account_tenure_features_agg()
 
             post_agg_1_start_stop, post_agg_2_start_stop = (
                 self._transform_intervals_to_start_stop()
@@ -1227,9 +1512,18 @@ class DataProcessor:
                 + column_names_to_keep_vehicle
                 + column_names_to_keep_churn
                 + column_names_to_keep_gap
+                + column_names_to_keep_tenure
             )
 
-            agg += agg_af + agg_app + agg_b + agg_vehicle + agg_churn + agg_gap
+            agg += (
+                agg_af
+                + agg_app
+                + agg_b
+                + agg_vehicle
+                + agg_churn
+                + agg_gap
+                + agg_tenure
+            )
             post_agg_1 += (
                 post_agg_1_af
                 + post_agg_1_app
@@ -1238,6 +1532,7 @@ class DataProcessor:
                 + post_agg_1_churn
                 + post_agg_1_start_stop
                 + post_agg_1_gap
+                + post_agg_1_tenure
             )
             post_agg_2 += (
                 post_agg_2_af
@@ -1246,6 +1541,7 @@ class DataProcessor:
                 + post_agg_2_vehicle
                 + post_agg_2_start_stop
                 + post_agg_2_gap
+                + post_agg_2_tenure
             )
             post_agg_3 += (
                 post_agg_3_af
