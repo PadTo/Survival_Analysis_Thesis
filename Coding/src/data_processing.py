@@ -306,11 +306,17 @@ class DataProcessor:
             end_interval = interval_in_days * (period + 1)
 
             for token, source_col in base_columns.items():
-                # Filling shifted-out rows with 0 where requested: an absent prior interval is no activity, not a missing measurement
+                # Filling shifted-out rows with 0 where requested: an absent prior interval is no activity, not a missing measurement.
+                # .over(USER_ID_COL) is required so the first intervals of a user do not
+                # inherit the previous user's lagged counts.
                 if fill_value is not None:
-                    shifted = pl.col(source_col).shift(period, fill_value=fill_value)
+                    shifted = (
+                        pl.col(source_col)
+                        .shift(period, fill_value=fill_value)
+                        .over(USER_ID_COL)
+                    )
                 else:
-                    shifted = pl.col(source_col).shift(period)
+                    shifted = pl.col(source_col).shift(period).over(USER_ID_COL)
 
                 lag_expressions.append(
                     shifted.alias(
