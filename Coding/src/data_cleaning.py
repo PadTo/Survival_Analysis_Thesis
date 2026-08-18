@@ -125,9 +125,9 @@ class DataCleaner:
         # Attaching per-user account metadata (e.g. registered_date) when available,
         # so downstream feature engineering can derive account-tenure features
         if self.df_user is not None and REGISTERED_DATE_COL in self.df_user.columns:
-            user_cols = self.df_user[[USER_ID_COL, REGISTERED_DATE_COL]].drop_duplicates(
-                subset=[USER_ID_COL]
-            )
+            user_cols = self.df_user[
+                [USER_ID_COL, REGISTERED_DATE_COL]
+            ].drop_duplicates(subset=[USER_ID_COL])
             df = df.merge(user_cols, on=USER_ID_COL, how="left")
 
         return df.copy()
@@ -181,8 +181,9 @@ class DataCleaner:
 
         df[CHURN_ADJUSTED_DATE_COL] = df[ACTIVITY_DATE_COL]
 
-        # Churn date is pushed forward by the threshold so the interval grid
-        # covers the full at-risk window, not just the last observed activity
+        # On churn rows, record definitional churn time as activity_date + threshold.
+        # DataProcessor interval grids still end at max(activity_date); they do not
+        # extend empty intervals through the post-churn quiet stretch.
         df.loc[df[CHURN_TRIGGERED_COL], CHURN_ADJUSTED_DATE_COL] += pd.Timedelta(
             days=threshold_value
         )
