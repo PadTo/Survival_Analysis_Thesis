@@ -18,4 +18,4 @@ DEFAULT_CAR_SHARE_ABS: int          = 4
 DEFAULT_CAR_SHARE_FRACTION: float   = 0.8
 QUANTILE_FILTER: float              = 0.9
 BURST_TIME_HR: float                = 1/30
-MIN_ACTIVITY_SPAN_DAYS: int         = 28
+MIN_ACTIVITY_SPAN_DAYS: int         = 56
