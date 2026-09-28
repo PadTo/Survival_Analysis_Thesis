@@ -1,8 +1,9 @@
-
+*.DS_Store
 .vscode/
 .venv/
 *.csv
-
+poetry.lock
+pyproject.toml
 
 Output/
 Coding/notebooks/test.ipynb
