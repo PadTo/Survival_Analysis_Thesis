@@ -35,6 +35,7 @@ from .constants.variables_groupings import (
     app_type_groups,
     brand_group_map,
 )
+from .constants.cleaning import MIN_ACTIVITY_SPAN_DAYS
 from .imputing import Imputer
 
 # ============================================================
@@ -163,7 +164,7 @@ class DataProcessor:
             pl.col(VEHICLE_MAKE_COL)
             .str.to_lowercase()
             .str.strip_chars()
-            .replace(brand_group_map),
+            .replace(brand_group_map, default="other_rare"),
         )
 
         # Vehicle age at observation time, rather than the model's production span.
@@ -176,14 +177,25 @@ class DataProcessor:
             .alias(VEHICLE_AGE_COLUMN_NAME)
         )
 
-        # Mileage bucket lower edge (same parse as Imputer._create_order_mileage_buckets).
-        # Used as an ordinal scale for garage-level mileage features; "unknown" → null.
+        # Mileage bucket rank on the ordering from Imputer._create_order_mileage_buckets
+        # (buckets sorted by lower edge); "unknown" → null.
+        # Ranks, not lower edges: the buckets sit on a regular 50,000 km grid up to
+        # 500,000, but the catch-all top bucket "> 1000000" holds 6.6% of vehicles
+        # (vs 0.5-0.8% for the two below it) and is mostly rollback/implausible data.
+        # Its lower edge is twenty grid steps up, which would give that one bucket
+        # extreme leverage in a linear term and leaves the garage mileage covariate
+        # on a 1e6 scale that makes the Cox information matrix ill-conditioned.
         df = df.with_columns(
-            pl.col(VEHICLE_MILEAGE_COL)
-            .str.replace_all(r"[ >]", "")
-            .str.split("-")
-            .list.first()
-            .cast(pl.Int64, strict=False)
+            (
+                pl.col(VEHICLE_MILEAGE_COL)
+                .str.replace_all(r"[ >]", "")
+                .str.split("-")
+                .list.first()
+                .cast(pl.Int64, strict=False)
+                .rank("dense")
+                - 1
+            )
+            .cast(pl.Int32)
             .alias(MILEAGE_ORDINAL_COL)
         )
 
@@ -508,7 +520,7 @@ class DataProcessor:
         Garage growth counts how many distinct vehicles first appeared in the recent
         window (via first_distinct), signalling re-engagement through new connections.
         Days since last new vehicle is the complementary recency of that event.
-        Mean mileage uses each bucket's lower edge (imputer ordering) averaged over
+        Mean mileage uses each bucket's ordinal rank (imputer ordering) averaged over
         distinct vehicles seen so far. Age dispersion is the running population SD
         of those same distinct-vehicle ages (0 when the garage has a single age).
 
@@ -624,7 +636,7 @@ class DataProcessor:
 
         column_names_to_keep += [PROP_IN_PROD_COL]
 
-        ##___MEAN MILEAGE (ordinal / bucket lower edge)___##
+        ##___MEAN MILEAGE (ordinal bucket rank)___##
         agg += [
             pl.col(MILEAGE_ORDINAL_COL)
             .filter(valid_distinct_vehicle)
@@ -1568,6 +1580,21 @@ class DataProcessor:
             # Drop each user's final interval: it is incomplete (no full interval of activity
             # observed) and its real churn label has already been shifted back onto the prior row
 
+            # Left-truncation entry point: filter_early_churners (data_cleaning.py) keeps only
+            # users whose activity span is >= MIN_ACTIVITY_SPAN_DAYS, i.e. every retained user's
+            # last activity offset (and hence churn-trigger offset) is guaranteed >= that many
+            # days from their own day 0. Because churn_triggered_adjusted is shift(-1) (features
+            # at row [t, t+D), event at [t+D, t+2D)), a row can carry a real (possibly-1) label
+            # only if t + 2*D > MIN_ACTIVITY_SPAN_DAYS. Rows at or before
+            # t = MIN_ACTIVITY_SPAN_DAYS - 2*D are guaranteed churn_triggered_adjusted = 0 by
+            # that inclusion criterion alone (immortal time, not signal), and -- being each
+            # user's earliest rows -- also have their longer lookback windows zero-filled for
+            # want of real pre-day-0 history. Entry into the modelled/exported frame is therefore
+            # set to t = MIN_ACTIVITY_SPAN_DAYS - D, the first row that can carry a real label;
+            # the dropped early rows are still used internally (already aggregated above) to
+            # power that entry row's own lookback/drift features.
+            entry_interval_start = MIN_ACTIVITY_SPAN_DAYS - interval_in_days
+
             df = (
                 df.with_columns(
                     (
@@ -1578,6 +1605,8 @@ class DataProcessor:
                 # Drop the incomplete final interval
                 .filter(~pl.col("_is_last_interval"))
                 .drop(["_is_last_interval"])
+                # Drop each user's structurally-immortal pre-entry rows (see above)
+                .filter(pl.col(INTERVAL_START_COL) >= entry_interval_start)
                 .select(column_names_to_keep)
             )
 
