@@ -1,47 +1,31 @@
-# Data directory
+# Data
 
-CSV files are intentionally excluded from version control. Place source data in
-`raw/`; the notebooks write derived datasets to `interim/` and `final/`.
+The CSV files are not in git. They are OBDeleven app logs and cannot be shared. `.gitignore` ignores `*.csv`.
 
-## Raw inputs
+## Raw
 
-Notebook `02_data_cleaning_and_saving.ipynb` currently reads:
+`raw/` holds three inputs:
 
-- `raw/activity_1000.csv`
-- `raw/vehicle_1000.csv`
-- `raw/user_1000.csv`
+- `activity.csv`
+- `user.csv`
+- `vehicle.csv`
 
-The path configuration also supports the complete source files:
+Notebook `02_data_cleaning_and_saving.ipynb` reads those three files. It does not read `activity_1000.csv`, `user_1000.csv`, or `vehicle_1000.csv`.
 
-- `raw/activity.csv`
-- `raw/user.csv`
-- `raw/vehicle.csv`
+## Interim
 
-## Generated datasets
+Notebook 02 splits customers into personal and professional segments and writes the cleaned tables to `interim/`. Notebook `04_preparing_data_for_modelling.ipynb` reads `interim/personal_users_filtered.csv`.
 
-Notebook `02` writes cleaned segment datasets to `interim/`, including
-`personal_users_filtered.csv` and `professional_users_filtered.csv`.
+## Final
 
-Notebook `04` reads the filtered interim data and writes feature-engineered
-person-interval datasets to `final/`:
+Notebook 04 writes three files to `final/`:
 
-- `features_personal_14_day_intervals_new_features.csv`
-- `features_personal_28_day_intervals_new_features.csv`
+- `features_personal_14_day_intervals_new_features.csv`, the 14-day blocks
+- `features_personal_28_day_intervals_new_features.csv`, the same customers on 28-day blocks
+- `user_folds_personal_14.csv`, five folds of 1,200 customers
 
-The R modelling script consumes the 14-day final dataset. Do not commit raw or
-generated CSV files.
+The 14-day file has 124,783 rows, 6,000 customers, and 2,774 events. Customers with a span under 56 days are dropped. The first row starts at day 42.
 
-## Left-truncation threshold (MIN_ACTIVITY_SPAN_DAYS)
+The models read the 14-day file and the fold file. The R scripts and notebook `07_xgboost.ipynb` write `oof_predictions.csv`, `oof_predictions_xgboost.csv`, `metrics_summary.csv`, `metrics_per_fold.csv`, `model_comparison.csv`, `lrt_linearity.csv`, `ph_zph_global.csv`, and `xgboost_shap_importance.csv` into `final/`. `metrics_summary.csv` stores M4 as `XGB`.
 
-All files currently in `final/` (features, `oof_predictions*.csv`, `metrics_*.csv`,
-`coefficients_m0.csv`, `xgboost_*`, `model_comparison.csv`) were regenerated with
-`MIN_ACTIVITY_SPAN_DAYS = 56` in `src/constants/cleaning.py` (early-churner /
-left-truncation filter in notebook `02`) as of 2026-09-18. This is an in-place
-overwrite of the pipeline outputs — filenames are unchanged from the previous
-28-day-threshold run, so there is no threshold marker in the live filenames.
-
-The previous run's (`MIN_ACTIVITY_SPAN_DAYS = 28`) aggregate metrics are archived,
-clearly labelled, in `final/archive_leftTrunc28_2026-09-15/`:
-`metrics_summary_leftTrunc28.csv`, `metrics_per_fold_leftTrunc28.csv`,
-`model_comparison_leftTrunc28.csv`. The underlying feature/OOF CSVs for that run
-were not kept (overwritten before archiving), only these summary tables.
+`final/archive_leftTrunc28_2026-09-15/` is an older run.

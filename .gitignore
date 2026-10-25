@@ -2,6 +2,12 @@
 .vscode/
 .venv/
 *.csv
+*.npy
+*.parquet
+*.feather
+*.pkl
+*.rds
+*.xlsx
 poetry.lock
 pyproject.toml
 
@@ -15,3 +21,7 @@ __pycache__/
 *.pyc
 
 *.Rprofile
+.ruff_cache/
+
+# Local OBDeleven extracts; never commit
+archive/data_snapshot_*/

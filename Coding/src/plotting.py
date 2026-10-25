@@ -39,7 +39,7 @@ IS_NOT_BURST_COL_NAME          = "is_not_burst"
 # ============================================================
 BAR_GRADIENT_FADE     = 0.45   # how much the lowest-ranked bar fades vs the top one
 BAR_EDGE_WIDTH        = 0.8
-BAR_HEADROOM          = 1.24   # y-limit multiplier so value labels never clip
+BAR_HEADROOM          = 1.32   # y-limit multiplier so value labels never clip
 GRID_LINEWIDTH        = 0.6
 GRID_ALPHA            = 0.35
 
@@ -82,14 +82,14 @@ class PlottingData:
                                 x_label: str,
                                 y_label: str,
                                 max_value: float,
-                                rotation: int = 35) -> None:
+                                rotation: int = 80) -> None:
         """Apply the shared categorical-bar axis styling so every bar plot reads identically."""
         # Dropping the left spine too: with a horizontal grid the y-axis line is redundant
         sns.despine(ax=ax, left=True)
-        ax.set_xlabel(x_label, labelpad=10)
-        ax.set_ylabel(y_label, labelpad=10)
-        ax.tick_params(axis="x", rotation=rotation, length=0)
-        ax.tick_params(axis="y", length=0)
+        ax.set_xlabel(x_label, labelpad=10, fontsize=15)
+        ax.set_ylabel(y_label, labelpad=10, fontsize=15)
+        ax.tick_params(axis="x", rotation=rotation, length=0, labelsize=13)
+        ax.tick_params(axis="y", length=0, labelsize=13)
         for label in ax.get_xticklabels():
             label.set_ha("right")
         # Horizontal-only grid keeps the focus on bar heights without vertical clutter
@@ -111,9 +111,14 @@ class PlottingData:
 
     def _annotate_bar_values(self, ax: Axes, counts, total: float) -> None:
         """Label each bar with its share (emphasised) and raw count (secondary)."""
-        base = mpl.rcParams["font.size"]
-        pct_size = base * IN_FIGURE_TEXT_SIZE_MULTIPLIER * 1.1
-        count_size = base * IN_FIGURE_TEXT_SIZE_MULTIPLIER * 0.9
+        counts = list(counts)
+        n_bars = max(len(list(ax.patches)), 1)
+        ax_width_in = ax.figure.get_figwidth() * max(ax.get_position().width, 0.72)
+        slot_in = ax_width_in / n_bars * 0.88
+        longest_pct = max(len(f"{c / total * 100:.1f}%") for c in counts)
+        longest_n = max(len(f"n={c:,.0f}") for c in counts)
+        pct_size = min(11.0, slot_in * 72 / (longest_pct * 0.58))
+        count_size = min(10.0, slot_in * 72 / (longest_n * 0.52))
 
         for bar, count in zip(ax.patches, counts):
             x = bar.get_x() + bar.get_width() / 2
@@ -123,7 +128,7 @@ class PlottingData:
             ax.annotate(
                 f"{count / total * 100:.1f}%",
                 xy=(x, height),
-                xytext=(0, 4),
+                xytext=(0, 3),
                 textcoords="offset points",
                 ha="center", va="bottom",
                 fontweight="bold",
@@ -134,7 +139,7 @@ class PlottingData:
             ax.annotate(
                 f"n={count:,.0f}",
                 xy=(x, height),
-                xytext=(0, 4 + pct_size + 3),
+                xytext=(0, 3 + pct_size + 2),
                 textcoords="offset points",
                 ha="center", va="bottom",
                 color=COLORS["secondary_text"],
@@ -281,9 +286,9 @@ class PlottingData:
             ax.grid(axis="x", visible=False)
             ax.grid(axis="y", linestyle="--", linewidth=GRID_LINEWIDTH, alpha=GRID_ALPHA)
             ax.set_axisbelow(True)
-            ax.tick_params(axis="y", length=0)
-            ax.set_xlabel("Days since previous activity", labelpad=10)
-            ax.set_ylabel(f"Count ({scale_label})", labelpad=10)
+            ax.tick_params(axis="both", length=0, labelsize=13)
+            ax.set_xlabel("Days since previous activity", labelpad=10, fontsize=15)
+            ax.set_ylabel(f"Count ({scale_label})", labelpad=10, fontsize=15)
 
             return ax
 
@@ -437,13 +442,17 @@ class PlottingData:
             sns.despine(ax=ax)
             ax.grid(linestyle="--", linewidth=GRID_LINEWIDTH, alpha=GRID_ALPHA)
             ax.set_axisbelow(True)
-            ax.set_xlabel("Unique vehicles", labelpad=10)
-            ax.set_ylabel("Top-4 vehicle share", labelpad=10)
+            ax.set_xlabel("Unique vehicles", labelpad=10, fontsize=15)
+            ax.set_ylabel("Top-4 vehicle share", labelpad=10, fontsize=15)
+            ax.tick_params(axis="both", labelsize=13)
 
             # Give the auto-generated size legend a readable title
             legend = ax.get_legend()
             if legend is not None:
                 legend.set_title("Effective HHI")
+                legend.get_title().set_fontsize(13)
+                for text in legend.get_texts():
+                    text.set_fontsize(12)
 
             return ax
 
@@ -549,7 +558,7 @@ class PlottingData:
                 bar.set_linewidth(BAR_EDGE_WIDTH)
 
             self._style_categorical_axis(ax, "Month", "Activity count",
-                                         max(heights) if heights else 1, rotation=45)
+                                         max(heights) if heights else 1, rotation=80)
 
             return ax
 
@@ -681,17 +690,23 @@ class PlottingData:
             mask = np.triu(np.ones_like(df_pd_corr))
             np.fill_diagonal(mask, 1)
 
+            annot_size = 6.5
+
             sns.heatmap(
                 df_pd_corr, cmap=cmap, center=0, vmin=-1, vmax=1,
                 mask=mask, square=True, linewidths=0.5, linecolor="#E7EBED",
                 cbar_kws={"shrink": 0.6, "label": "Correlation"},
-                annot=True, fmt=".2f", annot_kws={"size": 6},
+                annot=True, fmt=".2f", annot_kws={"size": annot_size},
                 ax=ax,
             )
-            
-            ax.set_title("Feature Correlation Matrix", color="#22333B", fontweight="bold", pad=14)
-            ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right", color="#5A6B73", fontsize=8)
-            ax.set_yticklabels(ax.get_yticklabels(), rotation=0, color="#5A6B73", fontsize=8)
+
+            ax.set_title("Feature Correlation Matrix", color="#22333B", fontweight="bold", pad=14, fontsize=16)
+            ax.set_xticklabels(ax.get_xticklabels(), rotation=60, ha="right", color="#5A6B73", fontsize=11)
+            ax.set_yticklabels(ax.get_yticklabels(), rotation=0, color="#5A6B73", fontsize=11)
+            cbar = ax.collections[0].colorbar
+            if cbar is not None:
+                cbar.ax.tick_params(labelsize=11)
+                cbar.set_label("Correlation", fontsize=13)
             
             return ax
     

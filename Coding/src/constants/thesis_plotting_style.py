@@ -1,4 +1,4 @@
-IN_FIGURE_TEXT_SIZE_MULTIPLIER: float = 0.8
+IN_FIGURE_TEXT_SIZE_MULTIPLIER: float = 1.0
 SCATTER_PLOT_SIZE_RANGE = (5, 100)
 
 
@@ -23,11 +23,12 @@ FONT: str = "DejaVu Sans"
 
 SEABORN_THEME = {
     "style": "whitegrid",
-    "context": "paper",
+    "context": "notebook",
     "font": FONT,
     "rc": {
         "figure.dpi": 300,
         "savefig.dpi": 300,
+        "font.size": 13,
         "axes.facecolor": COLORS["background"],
         "figure.facecolor": COLORS["background"],
         "axes.edgecolor": COLORS["axis"],
@@ -35,13 +36,17 @@ SEABORN_THEME = {
         "text.color": COLORS["text"],
         "xtick.color": COLORS["secondary_text"],
         "ytick.color": COLORS["secondary_text"],
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
         "grid.color": COLORS["grid"],
         "grid.linewidth": 0.8,
         "axes.spines.top": False,
         "axes.spines.right": False,
         "axes.titleweight": "semibold",
-        "axes.labelsize": 10,
-        "axes.titlesize": 12,
+        "axes.labelsize": 15,
+        "axes.titlesize": 16,
+        "legend.fontsize": 12,
+        "legend.title_fontsize": 13,
         "legend.frameon": False,
     },
 }

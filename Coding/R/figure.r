@@ -29,7 +29,7 @@ THESIS_COLOURS <- c(
 # also used below as a model colour; secondary_text reads as neutral ink.
 REF_LINE_COLOUR <- unname(THESIS_COLOURS[["secondary_text"]])
 
-theme_thesis <- function(base_size = 10) {
+theme_thesis <- function(base_size = 12) {
     theme_minimal(base_size = base_size) +
         theme(
             plot.background  = element_rect(fill = THESIS_COLOURS[["background"]], colour = NA),
@@ -67,7 +67,7 @@ LABELS <- c(
     vehicle_mean_age_overall = "Mean vehicle age",
     prop_live_data_0_56 = "Live-data proportion",
     usage_concentration = "Usage concentration",
-    overall_prop_vehicle_make_skoda = "<U+0160>koda proportion",
+    overall_prop_vehicle_make_skoda = "\u0160koda proportion",
     sd_gap_0_56_days = "Gap SD (56d)",
     overall_prop_vehicle_make_volkswagen = "Volkswagen proportion",
     prop_main_drift_0_28_vs_28_56 = "Main-app drift",
@@ -135,7 +135,7 @@ p09 <- ggplot(zph_df, aes(p, covariate, shape = transform, colour = transform)) 
     geom_vline(xintercept = 0.05, linetype = 2, colour = REF_LINE_COLOUR) +
     annotate("text",
         x = 0.05, y = -Inf, label = "0.05",
-        hjust = -0.2, vjust = -0.5, size = 2.6, colour = THESIS_COLOURS[["secondary_text"]]
+        hjust = -0.2, vjust = -0.5, size = 3.6, colour = THESIS_COLOURS[["secondary_text"]]
     ) +
     geom_point(size = 2, alpha = 0.85) +
     scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.25)) +
@@ -144,7 +144,7 @@ p09 <- ggplot(zph_df, aes(p, covariate, shape = transform, colour = transform)) 
     base_theme
 
 ggsave(file.path(fig_dir, "09_ph_test_transforms.png"), p09,
-    width = 9, height = 7, dpi = 300
+    width = 7.4, height = 8.2, dpi = 300
 )
 
 # ---- Fig 10: coefficients, forest plot ------------------------------
@@ -186,7 +186,7 @@ p10 <- coef_tab |>
     base_theme
 
 ggsave(file.path(fig_dir, "10_coefficients_m0.png"), p10,
-    width = 8, height = 7, dpi = 300
+    width = 7.2, height = 8.4, dpi = 300
 )
 
 # ---- Fig 11: M0 against M2a coefficients ----------------------------
@@ -204,7 +204,7 @@ p11 <- ggplot(cmp, aes(beta_m0, beta_m2a)) +
     base_theme
 
 ggsave(file.path(fig_dir, "11_tie_agreement.png"), p11,
-    width = 5.5, height = 5.5, dpi = 300
+    width = 5.6, height = 5.6, dpi = 300
 )
 
 }  # end exists("zph") — fig 09–11
@@ -239,7 +239,7 @@ p12 <- ggplot(cal_dat, aes(pred, obs, colour = model)) +
     theme(legend.position = "none")
 
 ggsave(file.path(fig_dir, "12_calibration.png"), p12,
-    width = 11.5, height = 3, dpi = 300
+    width = 7.6, height = 3.5, dpi = 300
 )
 
 # ---- Fig 13: AUC by fold, all five models ---------------------------
@@ -259,7 +259,7 @@ p13 <- per_fold |>
     base_theme
 
 ggsave(file.path(fig_dir, "13_auc_by_fold.png"), p13,
-    width = 8, height = 4.5, dpi = 300
+    width = 6.8, height = 4.4, dpi = 300
 )
 
 cat("figures written to", normalizePath(fig_dir), "\n")

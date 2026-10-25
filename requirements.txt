@@ -8,3 +8,5 @@ pyarrow
 scikit-learn
 seaborn
 statsmodels
+xgboost
+shap
