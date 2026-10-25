@@ -2,6 +2,8 @@
 
 Master's thesis by Tomas Padegimas, Data Science, Statistics, and Decision Analysis, Department of Computer and Systems Sciences, autumn 2026.
 
+The full thesis PDF is available at [thesis.pdf](thesis.pdf).
+
 **What.** I tested the two usual Cox assumptions—proportional hazards and linear covariate effects—on OBDeleven app activity logs for private customers, with churn defined as 160 days without activity.
 
 **How.** I compared M0–M4 on the same counting-process rows and scored discrimination and calibration out of fold.
